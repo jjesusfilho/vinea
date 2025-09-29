@@ -37,19 +37,48 @@ class MNIClient():
         
         return filepath
 
-    def baixar_lista_documentos(self, numero_processo: str, save_dir: str = "."):
-        # Limpa o número do processo
+    def validar_numero_processo(self, numero_processo: str):
         numero_limpo = numero_processo.replace(".", "").replace("-", "")
         
-        # Valida se o número limpo tem exatamente 20 dígitos
         if len(numero_limpo) != 20:
             raise ValueError(f"Número do processo deve ter 20 dígitos após limpeza. "
                             f"Recebido: '{numero_limpo}' com {len(numero_limpo)} dígitos")
         
-        # Valida se contém apenas dígitos
         if not numero_limpo.isdigit():
             raise ValueError(f"Número do processo deve conter apenas dígitos após limpeza. "
                             f"Recebido: '{numero_limpo}'")
+        
+        return numero_limpo
+
+    def consultar_processo(self, numero_processo: str, save_dir: str = "."):
+        
+        numero_limpo = self.validar_numero_processo(numero_processo)
+
+        try:
+            with self.client.settings(raw_response=True, strict=False):
+                resposta = self.client.service.consultarProcesso(
+                    idConsultante=self.usuario,
+                    senhaConsultante=self.senha,
+                    numeroProcesso=numero_limpo,
+                    incluirCabecalho=True,
+                    movimentos=None,
+                    dataReferencia=None,
+                    incluirDocumentos=None
+                )
+
+            filename = f"cabecalho_{''.join(filter(str.isalnum, numero_processo))}_time_{int(time())}.xml"
+            saved_path = self.save_to_xml_file(resposta.content, save_dir, filename)
+            print(f"Response saved to: {saved_path}")
+            return saved_path
+
+        except Exception as e:
+            print(f"Erro ao processar o processo {numero_processo}: {e}")
+            return None
+
+
+    def baixar_lista_documentos(self, numero_processo: str, save_dir: str = "."):
+       
+        numero_limpo = self.validar_numero_processo(numero_processo)
 
         try:
             with self.client.settings(raw_response=True, strict=False):
