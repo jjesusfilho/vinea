@@ -5,6 +5,12 @@ from time import time
 from lxml import etree
 import polars as pl
 
+try:
+    from pyspark.sql import SparkSession
+    SPARK_AVAILABLE = True
+except ImportError:
+    SPARK_AVAILABLE = False
+
 class MNIClient():
     """
     Cliente para interagir com o MNI do TJSP
@@ -102,11 +108,49 @@ class MNIClient():
             return None
 
 class MNIParser():
-    """
-    Parser para arquivos XML do MNI do TJSP
-    """
-    def __init__(self):
-        pass
+    
+    def __init__(self, use_spark: bool = False, spark_session: Optional[SparkSession] = None):
+        """
+        Inicializa o parser
+        
+        Args:
+            use_spark: Se True, usa Spark para ler arquivos. Se False, usa Python padrão
+            spark_session: Sessão Spark opcional. Se não fornecida e use_spark=True, cria uma nova
+        """
+        self.use_spark = use_spark
+        
+        if use_spark:
+            if not SPARK_AVAILABLE:
+                raise ImportError("PySpark não está disponível. Instale com: pip install pyspark")
+            
+            self.spark = spark_session or SparkSession.builder \
+                .appName("MNIParser") \
+                .config("spark.sql.adaptive.enabled", "true") \
+                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+                .getOrCreate()
+        else:
+            self.spark = None
+    
+    
+    def _read_xml_file(self, xml_path: str) -> str:
+        """
+        Lê o arquivo XML usando Spark ou Python padrão
+        
+        Args:
+            xml_path: Caminho para o arquivo XML
+            
+        Returns:
+            str: Conteúdo do arquivo XML
+        """
+        if self.use_spark:
+            # Usar Spark para ler o arquivo
+            df = self.spark.read.text(xml_path, wholetext=True)
+            xml_content = df.collect()[0]['value']
+            return xml_content
+        else:
+            # Usar Python padrão
+            with open(xml_path, 'r', encoding='utf-8') as file:
+                return file.read()
 
     def extrair_numero_tempo(self, xml_file):
         """
@@ -138,9 +182,8 @@ class MNIParser():
         Returns:
             tuple: (DataFrame do processo, DataFrame das partes)
         """
-        # Parse do XML
-        with open(xml_path, 'r', encoding='utf-8') as file:
-            xml_content = file.read()
+         # Lê o XML usando Spark ou Python padrão
+        xml_content = self._read_xml_file(xml_path)
         
         root = etree.fromstring(xml_content)
         
