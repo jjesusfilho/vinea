@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Optional
 from zeep import Client
 from time import time
 from lxml import etree
