@@ -36,15 +36,15 @@ class MNIParser():
             self.spark = None
     
     
-    def criar_registro_carga(self, caminho_arquivo: str) -> dict:
+    def criar_registro_carga(self, caminho_arquivo: str) -> pd.DataFrame:
         """
-        Cria um registro de carga a partir do nome do arquivo XML.
+        Cria um DataFrame com registro de carga a partir do nome do arquivo XML.
         
         Args:
             caminho_arquivo: Caminho completo para o arquivo XML
             
         Returns:
-            dict: Dicionário com informações do registro de carga
+            pd.DataFrame: DataFrame com informações do registro de carga
         """
         # Extrair informações do caminho
         arquivo_path = Path(caminho_arquivo)
@@ -99,30 +99,8 @@ class MNIParser():
             'observacoes': f'Arquivo {tipo_consulta} carregado do diretório {diretorio}'
         }
         
-        return registro
-
-    def criar_dataframe_registro_carga(self, caminhos_arquivos: list) -> pd.DataFrame:
-        """
-        Cria um DataFrame com registros de carga para múltiplos arquivos.
-        
-        Args:
-            caminhos_arquivos: Lista de caminhos para arquivos XML
-            
-        Returns:
-            pd.DataFrame: DataFrame com registros de carga
-        """
-        registros = []
-        
-        for caminho in caminhos_arquivos:
-            try:
-                registro = self.criar_registro_carga(caminho)
-                registros.append(registro)
-            except Exception as e:
-                print(f"Erro ao processar {caminho}: {e}")
-                continue
-        
-        return pd.DataFrame(registros)
-    
+        return pd.DataFrame([registro])
+     
     def _read_xml_file(self, xml_path: str) -> str:
         """
         Lê o arquivo XML usando Spark ou Python padrão
