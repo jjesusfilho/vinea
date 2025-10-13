@@ -2,6 +2,8 @@ import os
 import pandas as pd
 from lxml import etree
 from typing import Optional
+from pathlib import Path
+from datetime import datetime
 
 try:
     from pyspark.sql import SparkSession
@@ -33,6 +35,93 @@ class MNIParser():
         else:
             self.spark = None
     
+    
+    def criar_registro_carga(self, caminho_arquivo: str) -> dict:
+        """
+        Cria um registro de carga a partir do nome do arquivo XML.
+        
+        Args:
+            caminho_arquivo: Caminho completo para o arquivo XML
+            
+        Returns:
+            dict: Dicionário com informações do registro de carga
+        """
+        # Extrair informações do caminho
+        arquivo_path = Path(caminho_arquivo)
+        nome_arquivo = arquivo_path.name
+        diretorio = arquivo_path.parent.name
+        
+        # Extrair informações do nome do arquivo
+        nome_sem_ext = nome_arquivo.replace('.xml', '')
+        
+        # Separar as partes
+        if nome_sem_ext.startswith('cabecalho_'):
+            partes = nome_sem_ext.replace('cabecalho_', '').split('_time_')
+            tipo_consulta = 'cabecalho'
+        else:
+            partes = nome_sem_ext.split('_time_')
+            tipo_consulta = 'documentos'
+        
+        if len(partes) != 2:
+            raise ValueError(f"Nome do arquivo não está no formato esperado: {nome_arquivo}")
+        
+        numero_processo_raw, timestamp_str = partes
+        
+        # Converter timestamp Unix para datetime
+        timestamp = int(timestamp_str)
+        data_carga = datetime.fromtimestamp(timestamp)
+        
+        # Formatar número do processo
+        if len(numero_processo_raw) == 20:
+            numero_processo_formatado = f"{numero_processo_raw[:7]}-{numero_processo_raw[7:9]}.{numero_processo_raw[9:13]}.{numero_processo_raw[13:14]}.{numero_processo_raw[14:16]}.{numero_processo_raw[16:]}"
+        else:
+            numero_processo_formatado = numero_processo_raw
+        
+        # Obter informações do arquivo
+        tamanho_arquivo = arquivo_path.stat().st_size if arquivo_path.exists() else 0
+        
+        # Criar registro de carga
+        registro = {
+            'id_carga': f"{numero_processo_raw}_{timestamp}",
+            'nome_arquivo': nome_arquivo,
+            'caminho_completo': str(arquivo_path.absolute()),
+            'diretorio': diretorio,
+            'numero_processo_raw': numero_processo_raw,
+            'numero_processo_formatado': numero_processo_formatado,
+            'tipo_consulta': tipo_consulta,
+            'timestamp_carga': timestamp,
+            'data_carga': data_carga,
+            'data_carga_str': data_carga.strftime('%Y-%m-%d %H:%M:%S'),
+            'tamanho_arquivo_bytes': tamanho_arquivo,
+            'extensao': arquivo_path.suffix,
+            'status_processamento': 'pendente',
+            'data_registro': datetime.now(),
+            'observacoes': f'Arquivo {tipo_consulta} carregado do diretório {diretorio}'
+        }
+        
+        return registro
+
+    def criar_dataframe_registro_carga(self, caminhos_arquivos: list) -> pd.DataFrame:
+        """
+        Cria um DataFrame com registros de carga para múltiplos arquivos.
+        
+        Args:
+            caminhos_arquivos: Lista de caminhos para arquivos XML
+            
+        Returns:
+            pd.DataFrame: DataFrame com registros de carga
+        """
+        registros = []
+        
+        for caminho in caminhos_arquivos:
+            try:
+                registro = self.criar_registro_carga(caminho)
+                registros.append(registro)
+            except Exception as e:
+                print(f"Erro ao processar {caminho}: {e}")
+                continue
+        
+        return pd.DataFrame(registros)
     
     def _read_xml_file(self, xml_path: str) -> str:
         """
