@@ -11,22 +11,28 @@ try:
 except ImportError:
     SPARK_AVAILABLE = False
 
+try:
+    from notebookutils import mssparkutils
+    MSSPARKUTILS_AVAILABLE = True
+except ImportError:
+    MSSPARKUTILS_AVAILABLE = False
+
 class MNIParser():
     
     def __init__(self, use_spark: bool = False, spark_session: Optional[SparkSession] = None):
         """
         Inicializa o parser
-        
+
         Args:
             use_spark: Se True, usa Spark para ler arquivos. Se False, usa Python padrão
             spark_session: Sessão Spark opcional. Se não fornecida e use_spark=True, cria uma nova
         """
         self.use_spark = use_spark
-        
+
         if use_spark:
             if not SPARK_AVAILABLE:
                 raise ImportError("PySpark não está disponível. Instale com: pip install pyspark")
-            
+
             self.spark = spark_session or SparkSession.builder \
                 .appName("MNIParser") \
                 .config("spark.sql.adaptive.enabled", "true") \
@@ -34,26 +40,82 @@ class MNIParser():
                 .getOrCreate()
         else:
             self.spark = None
+
+    def _is_abfss_path(self, path: str) -> bool:
+        """
+        Verifica se o caminho é um caminho ABFSS (Azure Blob File System)
+
+        Args:
+            path: Caminho do arquivo
+
+        Returns:
+            bool: True se for caminho ABFSS, False caso contrário
+        """
+        return path.startswith('abfss://') or path.startswith('abfs://')
+
+    def _get_file_mtime(self, file_path: str) -> float:
+        """
+        Obtém o timestamp de modificação do arquivo, suportando tanto caminhos locais quanto ABFSS
+
+        Args:
+            file_path: Caminho do arquivo (local ou ABFSS)
+
+        Returns:
+            float: Timestamp de modificação do arquivo em segundos desde epoch
+        """
+        if self.use_spark and self._is_abfss_path(file_path):
+            # Usar mssparkutils para caminhos ABFSS
+            if not MSSPARKUTILS_AVAILABLE:
+                raise ImportError(
+                    "mssparkutils não está disponível. "
+                    "Este módulo é necessário para trabalhar com caminhos ABFSS em ambientes Azure."
+                )
+
+            try:
+                # Obter informações do arquivo usando mssparkutils
+                file_info = mssparkutils.fs.ls(file_path)
+                if file_info:
+                    # mssparkutils retorna modifyTime em milissegundos
+                    return file_info[0].modifyTime / 1000.0
+                else:
+                    # Se não conseguir obter informações, usar timestamp atual
+                    return datetime.now().timestamp()
+            except Exception as e:
+                # Fallback para timestamp atual em caso de erro
+                print(f"Aviso: Não foi possível obter timestamp do arquivo {file_path}: {e}")
+                return datetime.now().timestamp()
+        else:
+            # Usar pathlib para caminhos locais
+            arquivo_path = Path(file_path)
+            if arquivo_path.exists():
+                return arquivo_path.stat().st_mtime
+            else:
+                return datetime.now().timestamp()
     
     
     def criar_registro_carga(self, caminho_arquivo: str) -> pd.DataFrame:
         """
         Cria um DataFrame com registro de carga a partir do nome do arquivo XML.
-        
+
         Args:
             caminho_arquivo: Caminho completo para o arquivo XML
-            
+
         Returns:
             pd.DataFrame: DataFrame com informações do registro de carga
         """
         # Extrair informações do caminho
-        arquivo_path = Path(caminho_arquivo)
-        nome_arquivo = arquivo_path.name
-        diretorio = arquivo_path.parent.name
-        
+        if self._is_abfss_path(caminho_arquivo):
+            # Para caminhos ABFSS, extrair nome do arquivo manualmente
+            nome_arquivo = caminho_arquivo.split('/')[-1]
+            diretorio = caminho_arquivo.split('/')[-2]
+        else:
+            arquivo_path = Path(caminho_arquivo)
+            nome_arquivo = arquivo_path.name
+            diretorio = arquivo_path.parent.name
+
         # Extrair informações do nome do arquivo
         nome_sem_ext = nome_arquivo.replace('.xml', '')
-        
+
         # Separar as partes
         if nome_sem_ext.startswith('cabecalho_'):
             numero_processo_raw = nome_sem_ext.replace('cabecalho_', '')
@@ -63,23 +125,35 @@ class MNIParser():
             tipo_consulta = 'documentos'
 
         # Usar a data de modificação do arquivo como data de carga
-        data_carga = datetime.fromtimestamp(arquivo_path.stat().st_mtime)
-        timestamp = int(arquivo_path.stat().st_mtime)
+        mtime = self._get_file_mtime(caminho_arquivo)
+        data_carga = datetime.fromtimestamp(mtime)
+        timestamp = int(mtime)
         
         # Formatar número do processo
         if len(numero_processo_raw) == 20:
             numero_processo_formatado = f"{numero_processo_raw[:7]}-{numero_processo_raw[7:9]}.{numero_processo_raw[9:13]}.{numero_processo_raw[13:14]}.{numero_processo_raw[14:16]}.{numero_processo_raw[16:]}"
         else:
             numero_processo_formatado = numero_processo_raw
-        
-        # Obter informações do arquivo
-        tamanho_arquivo = arquivo_path.stat().st_size if arquivo_path.exists() else 0
+
+        # Obter tamanho do arquivo
+        if self._is_abfss_path(caminho_arquivo):
+            if self.use_spark and MSSPARKUTILS_AVAILABLE:
+                try:
+                    file_info = mssparkutils.fs.ls(caminho_arquivo)
+                    tamanho_arquivo = file_info[0].size if file_info else 0
+                except Exception:
+                    tamanho_arquivo = 0
+            else:
+                tamanho_arquivo = 0
+        else:
+            arquivo_path = Path(caminho_arquivo)
+            tamanho_arquivo = arquivo_path.stat().st_size if arquivo_path.exists() else 0
         
         # Criar registro de carga
         registro = {
             'id_carga': f"{numero_processo_raw}_{timestamp}",
             'nome_arquivo': nome_arquivo,
-            'caminho_completo': str(arquivo_path.absolute()),
+            'caminho_completo': caminho_arquivo if self._is_abfss_path(caminho_arquivo) else str(Path(caminho_arquivo).absolute()),
             'diretorio': diretorio,
             'numero_processo_raw': numero_processo_raw,
             'numero_processo_formatado': numero_processo_formatado,
@@ -88,7 +162,7 @@ class MNIParser():
             'data_carga': data_carga,
             'data_carga_str': data_carga.strftime('%Y-%m-%d %H:%M:%S'),
             'tamanho_arquivo_bytes': tamanho_arquivo,
-            'extensao': arquivo_path.suffix,
+            'extensao': '.xml' if self._is_abfss_path(caminho_arquivo) else Path(caminho_arquivo).suffix,
             'status_processamento': 'pendente',
             'data_registro': datetime.now(),
             'observacoes': f'Arquivo {tipo_consulta} carregado do diretório {diretorio}'
@@ -127,7 +201,10 @@ class MNIParser():
             list: [Número do processo extraído, timestamp de modificação do arquivo]
         """
         # Exemplo de nome de arquivo: "0000000000000000000.xml" ou "cabecalho_0000000000000000000.xml"
-        arquivo = os.path.basename(xml_file).replace('.xml', '')
+        if self._is_abfss_path(xml_file):
+            arquivo = xml_file.split('/')[-1].replace('.xml', '')
+        else:
+            arquivo = os.path.basename(xml_file).replace('.xml', '')
 
         # Remover o prefixo 'cabecalho_' se existir
         if arquivo.startswith('cabecalho_'):
@@ -136,8 +213,7 @@ class MNIParser():
             numero_processo = arquivo
 
         # Obter timestamp de modificação do arquivo
-        arquivo_path = Path(xml_file)
-        timestamp = int(arquivo_path.stat().st_mtime) if arquivo_path.exists() else int(datetime.now().timestamp())
+        timestamp = int(self._get_file_mtime(xml_file))
 
         return [numero_processo, str(timestamp)]
 
