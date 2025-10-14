@@ -56,20 +56,15 @@ class MNIParser():
         
         # Separar as partes
         if nome_sem_ext.startswith('cabecalho_'):
-            partes = nome_sem_ext.replace('cabecalho_', '').split('_time_')
+            numero_processo_raw = nome_sem_ext.replace('cabecalho_', '')
             tipo_consulta = 'cabecalho'
         else:
-            partes = nome_sem_ext.split('_time_')
+            numero_processo_raw = nome_sem_ext
             tipo_consulta = 'documentos'
-        
-        if len(partes) != 2:
-            raise ValueError(f"Nome do arquivo não está no formato esperado: {nome_arquivo}")
-        
-        numero_processo_raw, timestamp_str = partes
-        
-        # Converter timestamp Unix para datetime
-        timestamp = int(timestamp_str)
-        data_carga = datetime.fromtimestamp(timestamp)
+
+        # Usar a data de modificação do arquivo como data de carga
+        data_carga = datetime.fromtimestamp(arquivo_path.stat().st_mtime)
+        timestamp = int(arquivo_path.stat().st_mtime)
         
         # Formatar número do processo
         if len(numero_processo_raw) == 20:
@@ -123,23 +118,28 @@ class MNIParser():
 
     def extrair_numero_tempo(self, xml_file):
         """
-        Extrai o número do processo e o tempo do nome do arquivo.
-    
+        Extrai o número do processo do nome do arquivo e a data de modificação.
+
         Args:
           xml_file (str): Nome do arquivo no formato xml
-        
+
         Returns:
-            list: [Número do processo extraído, hora_coleta]
+            list: [Número do processo extraído, timestamp de modificação do arquivo]
         """
-        # Exemplo de nome de arquivo: "0000000-00.0000.0.00.0000_time_1700000000.xml"
+        # Exemplo de nome de arquivo: "0000000000000000000.xml" ou "cabecalho_0000000000000000000.xml"
         arquivo = os.path.basename(xml_file).replace('.xml', '')
 
-        partes = arquivo.split('_time_')
-        
-        if len(partes) != 2:
-            raise ValueError("Nome do arquivo não está no formato esperado.")
-        
-        return partes
+        # Remover o prefixo 'cabecalho_' se existir
+        if arquivo.startswith('cabecalho_'):
+            numero_processo = arquivo.replace('cabecalho_', '')
+        else:
+            numero_processo = arquivo
+
+        # Obter timestamp de modificação do arquivo
+        arquivo_path = Path(xml_file)
+        timestamp = int(arquivo_path.stat().st_mtime) if arquivo_path.exists() else int(datetime.now().timestamp())
+
+        return [numero_processo, str(timestamp)]
 
     def extrair_dados_basicos_xml(self, xml_path: str):
         """

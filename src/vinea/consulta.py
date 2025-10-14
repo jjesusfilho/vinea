@@ -1,7 +1,6 @@
 import os
 from typing import Any
 from zeep import Client
-from time import time
 
 class MNIClient():
     """
@@ -64,7 +63,7 @@ class MNIClient():
                     incluirDocumentos=None
                 )
 
-            filename = f"cabecalho_{''.join(filter(str.isalnum, numero_processo))}_time_{int(time())}.xml"
+            filename = f"cabecalho_{''.join(filter(str.isalnum, numero_processo))}.xml"
             saved_path = self.save_to_xml_file(resposta.content, save_dir, filename)
             print(f"Response saved to: {saved_path}")
             return saved_path
@@ -90,7 +89,7 @@ class MNIClient():
                     incluirDocumentos=True
                 )
 
-            filename = f"{''.join(filter(str.isalnum, numero_processo))}_time_{int(time())}.xml"
+            filename = f"{''.join(filter(str.isalnum, numero_processo))}.xml"
             saved_path = self.save_to_xml_file(resposta.content, save_dir, filename)
             print(f"Response saved to: {saved_path}")
             return saved_path
