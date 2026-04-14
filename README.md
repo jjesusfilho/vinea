@@ -6,10 +6,13 @@
 
 Wrapper e parser Python sobre a interface SOAP MNI do TJSP para você:
 
+- **Suporta múltiplos sistemas**: E-SAJ, E-Proc 1G (1ª Instância) e E-Proc 2G (2ª Instância)
 - baixar cabeçalhos de processo, listas de movimentações e metadados de documentos via `consultarProcesso`
 - obter arquivos binários de documentos (PDF/OCR) pelos seus identificadores
+- **Geração automática de senha E-Proc** usando SHA-256 com data atual
 - persistir as respostas em disco para ETL ou análises posteriores
 - analisar os XMLs salvos (como arquivos `.xml` isolados, caminhos ABFSS ou diretórios de shards de texto do Spark) em DataFrames pandas (`dados básicos`, `partes`, `movimentos`, `documentos`)
+- funciona com ou sem PySpark (modo simplificado disponível)
 
 ## 🔹 MPU Extractor (Medidas Protetivas de Urgência)
 
@@ -58,11 +61,15 @@ df_localizacao = parser.mpu_para_df_localizacao(mpu_data)  # Endereços + coorde
    uv sync
    ```
 
-2. Configurar `.env` com credenciais:
+2. Configurar `.env` com credenciais (veja [.env.example](.env.example)):
    ```env
-   # MNI TJSP (para consulta de processos)
+   # MNI TJSP E-SAJ (sistema tradicional)
    TJSPMNIUSUARIO=seu_usuario
    TJSPMNISENHA=sua_senha
+
+   # E-Proc (1G e 2G)
+   EPROC_USUARIO=CAO_CAEx_Consulta_MP
+   EPROC_PASSWORD_SECRET=***REMOVIDO-SEGREDO-EPROC***  # Segredo para geração de senha SHA-256
 
    # Azure OpenAI (para extração de MPUs)
    AZURE_OPENAI_API_KEY=sua_chave
@@ -78,6 +85,8 @@ df_localizacao = parser.mpu_para_df_localizacao(mpu_data)  # Endereços + coorde
 
 ## Exemplo de uso - MNI Client
 
+### E-SAJ (Sistema Tradicional)
+
 ```python
 from vinea import MNIClient, MNIParser
 from config import config
@@ -85,11 +94,12 @@ from config import config
 cfg = config["development"]()
 cfg.create_directories()
 
-# Cliente: pode receber uma SparkSession opcional; cria uma internamente se não passar.
+# Cliente E-SAJ: pode receber uma SparkSession opcional; cria uma internamente se não passar.
 client = MNIClient(
     usuario=cfg.TJSP_MNI_USUARIO,
     senha=cfg.TJSP_MNI_SENHA,
-    # spark=my_spark_session  # opcional
+    system="esaj",  # Sistema padrão
+    use_spark=True  # Se False, salva arquivos sem Spark
 )
 
 # Parser leve: use use_spark=True para habilitar leitura Spark, shards TXT e caminhos ABFSS
@@ -110,6 +120,40 @@ pdf_paths = client.baixar_documentos(
     documentos_ids=doc_ids,
     save_dir=str(cfg.DATA_BRONZE_DIR / "pdfs"),
 )
+```
+
+### E-Proc (1ª e 2ª Instâncias)
+
+```python
+from vinea import create_eproc1g_client, create_eproc2g_client, generate_eproc_password
+from config import config
+
+cfg = config["development"]()
+
+# === E-Proc 1G (1ª Instância) ===
+# A senha é gerada automaticamente usando SHA-256(DD-MM-AAAA + secret)
+client_1g = create_eproc1g_client(
+    usuario=cfg.EPROC_USUARIO,  # CAO_CAEx_Consulta_MP
+    version="2.2",  # ou "3.0"
+    use_spark=False  # Modo simplificado sem Spark
+    # senha será gerada automaticamente do .env
+)
+
+# === E-Proc 2G (2ª Instância) ===
+client_2g = create_eproc2g_client(
+    usuario=cfg.EPROC_USUARIO,
+    use_spark=False
+)
+
+# === Geração manual de senha (se necessário) ===
+from datetime import datetime
+senha_hoje = generate_eproc_password()  # Usa secret do .env
+senha_data = generate_eproc_password(date=datetime(2026, 4, 13))
+
+# Uso é idêntico ao E-SAJ
+processo = "4000634-60.2025.8.26.0483"
+header_path = client_1g.consultar_processo(processo, save_dir="data/bronze/eproc1g")
+movimentos_path = client_1g.baixar_movimentos(processo, save_dir="data/bronze/eproc1g")
 ```
 
 - O `MNIClient` salva XMLs usando Spark (`.coalesce(1).write.text`) quando uma sessão Spark estiver disponível.

@@ -15,3 +15,6 @@ data/
 
 # MPUs directory contains sensitive court case PDFs
 mpus/
+
+# E-Proc implementation documentation (may contain sensitive info)
+EPROC_IMPLEMENTATION.md

@@ -1,7 +1,9 @@
 import base64
+import hashlib
 import os
 import warnings
-from typing import Any, Optional, Sequence
+from datetime import datetime
+from typing import Any, Optional, Sequence, Literal
 import xml.etree.ElementTree as ET
 
 from zeep import Client
@@ -9,32 +11,125 @@ from pyspark.sql import SparkSession
 
 CNJ_NAMESPACE = "http://www.cnj.jus.br/intercomunicacao-2.2.2"
 
+# Tipos de sistema disponíveis
+SystemType = Literal["esaj", "eproc1g_2.2", "eproc1g_3.0", "eproc2g"]
+
+# Mapeamento de WSDLs
+SYSTEM_WSDLS = {
+    "esaj": "http://esaj.tjsp.jus.br/mniws/servico-intercomunicacao-2.2.2/intercomunicacao?wsdl",
+    "eproc1g_2.2": "https://eproc1gws.tjsp.jus.br/eproc/wsdl.php?srv=intercomunicacaoUnificada2.2",
+    "eproc1g_3.0": "https://eproc1gws.tjsp.jus.br/eproc/wsdl.php?srv=intercomunicacaoUnificada3.0",
+    "eproc2g": "https://eproc2g.tjsp.jus.br/eproc/ws/intercomunicacao2.2/wsdl/servico-intercomunicacao-2.2.2.wsdl",
+}
+
+def generate_eproc_password(secret: Optional[str] = None, date: Optional[datetime] = None) -> str:
+    """
+    Gera a senha dinâmica para E-Proc usando SHA-256
+
+    A senha é gerada através do hash SHA-256 da concatenação:
+    dia-mês-ano + segredo
+
+    Args:
+        secret: Segredo fixo para geração da senha (se None, lê de EPROC_PASSWORD_SECRET no .env)
+        date: Data para geração da senha (padrão: data atual)
+
+    Returns:
+        Hash SHA-256 em formato hexadecimal
+
+    Raises:
+        ValueError: Se o segredo não for fornecido e não estiver no .env
+
+    Example:
+        >>> # Para hoje (com segredo do .env)
+        >>> senha = generate_eproc_password()
+        >>> # Para uma data específica
+        >>> from datetime import datetime
+        >>> senha = generate_eproc_password(date=datetime(2026, 4, 13))
+        >>> # Com segredo customizado
+        >>> senha = generate_eproc_password(secret="meu_segredo")
+    """
+    # Se o segredo não foi fornecido, tenta ler do ambiente
+    if secret is None:
+        secret = os.getenv('EPROC_PASSWORD_SECRET', '')
+        if not secret:
+            raise ValueError(
+                "Segredo não fornecido. Configure EPROC_PASSWORD_SECRET no arquivo .env "
+                "ou passe o parâmetro 'secret' para a função."
+            )
+
+    if date is None:
+        date = datetime.now()
+
+    # Formata a data como DD-MM-AAAA
+    date_str = date.strftime("%d-%m-%Y")
+
+    # Concatena data + segredo
+    password_input = date_str + secret
+
+    # Gera o hash SHA-256
+    password_hash = hashlib.sha256(password_input.encode('utf-8')).hexdigest()
+
+    return password_hash
+
 class MNIClient():
     """
-    Cliente para interagir com o MNI do TJSP
+    Cliente para interagir com o MNI do TJSP (ESAJ e E-Proc)
+
+    Suporta os seguintes sistemas:
+    - esaj: Sistema E-SAJ tradicional
+    - eproc1g_2.2: E-Proc 1ª Instância versão 2.2
+    - eproc1g_3.0: E-Proc 1ª Instância versão 3.0
+    - eproc2g: E-Proc 2ª Instância
     """
 
-    def __init__(self, usuario: str, senha: str, spark: Optional[SparkSession] = None):
+    def __init__(
+        self,
+        usuario: str,
+        senha: str,
+        spark: Optional[SparkSession] = None,
+        system: SystemType = "esaj",
+        wsdl: Optional[str] = None,
+        use_spark: bool = True
+    ):
         """
         Inicializa o cliente TJSP com Zeep
 
         Args:
-            usuario: Usuário para autenticação (se necessário)
-            senha: Senha para autenticação (se necessário)
-            spark: Sessão Spark (opcional, será criada se não fornecida)
+            usuario: Usuário para autenticação
+            senha: Senha para autenticação
+            spark: Sessão Spark (opcional, será criada se use_spark=True e não fornecida)
+            system: Sistema a ser usado ("esaj", "eproc1g_2.2", "eproc1g_3.0", "eproc2g")
+            wsdl: WSDL customizado (sobrescreve o padrão do sistema)
+            use_spark: Se True, cria/usa Spark; se False, não usa Spark (padrão: True)
         """
-        self.wsdl = 'http://esaj.tjsp.jus.br/mniws/servico-intercomunicacao-2.2.2/intercomunicacao?wsdl'
+        self.system = system
+        self.use_spark = use_spark
+
+        # Define o WSDL baseado no sistema ou usa o customizado
+        if wsdl:
+            self.wsdl = wsdl
+        elif system in SYSTEM_WSDLS:
+            self.wsdl = SYSTEM_WSDLS[system]
+        else:
+            raise ValueError(
+                f"Sistema '{system}' não reconhecido. "
+                f"Opções válidas: {', '.join(SYSTEM_WSDLS.keys())}"
+            )
+
         self.usuario = usuario
         self.senha = senha
         self.client = Client(wsdl=self.wsdl)
 
         # Inicializa ou usa a sessão Spark fornecida
-        if spark is None:
-            self.spark = SparkSession.builder \
-                .appName("MNIClient") \
-                .getOrCreate()
+        if use_spark:
+            if spark is None:
+                self.spark = SparkSession.builder \
+                    .appName(f"MNIClient-{system}") \
+                    .getOrCreate()
+            else:
+                self.spark = spark
         else:
-            self.spark = spark
+            self.spark = None
     def save_to_xml_file(self, data: Any, save_dir: str, filename: str):
         # Assegura que o diretório existe
         os.makedirs(save_dir, exist_ok=True)
@@ -48,19 +143,28 @@ class MNIClient():
             else:
                 xml_content = str(data)
 
-            # Cria um DataFrame com o conteúdo XML
-            df = self.spark.createDataFrame([(xml_content,)], ["value"])
+            # Se Spark está disponível, usa Spark
+            if self.use_spark and self.spark is not None:
+                # Cria um DataFrame com o conteúdo XML
+                df = self.spark.createDataFrame([(xml_content,)], ["value"])
 
-            # Salva usando Spark em formato texto
-            # Usa coalesce(1) para gerar um único arquivo de saída
-            output_path = filepath
-            df.coalesce(1).write.mode("overwrite").text(output_path)
+                # Salva usando Spark em formato texto
+                # Usa coalesce(1) para gerar um único arquivo de saída
+                output_path = filepath
+                df.coalesce(1).write.mode("overwrite").text(output_path)
 
-            print(f"Arquivo salvo em: {output_path}")
-            return output_path
+                print(f"Arquivo salvo em: {output_path}")
+                return output_path
+            else:
+                # Salva diretamente como arquivo de texto sem Spark
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(xml_content)
+
+                print(f"Arquivo salvo em: {filepath}")
+                return filepath
 
         except Exception as e:
-            raise ValueError(f"Não pode salvar arquivo XML com Spark: {e}")
+            raise ValueError(f"Não pode salvar arquivo XML: {e}")
 
     def validar_numero_processo(self, numero_processo: str):
         numero_limpo = numero_processo.replace(".", "").replace("-", "")
@@ -304,3 +408,74 @@ class MNIClient():
             stacklevel=2
         )
         return self.listar_documentos(numero_processo, save_dir)
+
+
+# Factory methods para facilitar a criação de clientes
+def create_esaj_client(usuario: str, senha: str, spark: Optional[SparkSession] = None) -> MNIClient:
+    """
+    Cria um cliente para o sistema E-SAJ
+
+    Args:
+        usuario: Usuário para autenticação
+        senha: Senha para autenticação
+        spark: Sessão Spark opcional
+
+    Returns:
+        MNIClient configurado para E-SAJ
+    """
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="esaj")
+
+
+def create_eproc1g_client(
+    usuario: str,
+    senha: Optional[str] = None,
+    spark: Optional[SparkSession] = None,
+    version: Literal["2.2", "3.0"] = "2.2",
+    auto_password: bool = True
+) -> MNIClient:
+    """
+    Cria um cliente para o sistema E-Proc 1ª Instância
+
+    Args:
+        usuario: Usuário para autenticação
+        senha: Senha para autenticação (se None e auto_password=True, será gerada automaticamente)
+        spark: Sessão Spark opcional
+        version: Versão da API ("2.2" ou "3.0")
+        auto_password: Se True, gera a senha automaticamente usando a data atual
+
+    Returns:
+        MNIClient configurado para E-Proc 1G
+    """
+    if senha is None and auto_password:
+        senha = generate_eproc_password()
+    elif senha is None:
+        raise ValueError("Senha deve ser fornecida ou auto_password deve ser True")
+
+    system = f"eproc1g_{version}"
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system=system)
+
+
+def create_eproc2g_client(
+    usuario: str,
+    senha: Optional[str] = None,
+    spark: Optional[SparkSession] = None,
+    auto_password: bool = True
+) -> MNIClient:
+    """
+    Cria um cliente para o sistema E-Proc 2ª Instância
+
+    Args:
+        usuario: Usuário para autenticação
+        senha: Senha para autenticação (se None e auto_password=True, será gerada automaticamente)
+        spark: Sessão Spark opcional
+        auto_password: Se True, gera a senha automaticamente usando a data atual
+
+    Returns:
+        MNIClient configurado para E-Proc 2G
+    """
+    if senha is None and auto_password:
+        senha = generate_eproc_password()
+    elif senha is None:
+        raise ValueError("Senha deve ser fornecida ou auto_password deve ser True")
+
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="eproc2g")

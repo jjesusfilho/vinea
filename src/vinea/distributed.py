@@ -41,6 +41,12 @@ def extract_observations(texto):
     df = pd.DataFrame(dados, columns=colunas)
     df[colunas] = df[colunas].apply(lambda col: col.str.strip().str.replace(r"\n", " ", regex=True))
 
+    # Valida número do processo (formato CNJ: NNNNNNN-DD.AAAA.J.TR.OOOO)
+    # Remove linhas onde 'processo' não tem o padrão correto
+    processo_pattern = r'^\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}$'
+    if 'processo' in df.columns:
+        df = df[df['processo'].str.match(processo_pattern, na=False)].copy()
+
     return df
 
 

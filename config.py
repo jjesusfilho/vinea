@@ -37,6 +37,17 @@ class Config:
     TJSP_MNI_USUARIO = os.getenv('TJSPMNIUSUARIO', '')
     TJSP_MNI_SENHA = os.getenv('TJSPMNISENHA', '')
     TJSP_MNI_WSDL = os.getenv('TJSP_MNI_WSDL', 'http://esaj.tjsp.jus.br/mniws/servico-intercomunicacao-2.2.2/intercomunicacao?wsdl')
+
+    # E-Proc - usando as variáveis do seu .env
+    EPROC_USUARIO = os.getenv('EPROC_USUARIO', 'CAO_CAEx_Consulta_MP')
+    EPROC_PASSWORD_SECRET = os.getenv('EPROC_PASSWORD_SECRET', '')  # Segredo para geração de senha SHA-256
+
+    # E-Proc 1G WSDLs
+    EPROC_1G_WSDL_2_2 = os.getenv('EPROC_1G_WSDL_2_2', 'https://eproc1gws.tjsp.jus.br/eproc/wsdl.php?srv=intercomunicacaoUnificada2.2')
+    EPROC_1G_WSDL_3_0 = os.getenv('EPROC_1G_WSDL_3_0', 'https://eproc1gws.tjsp.jus.br/eproc/wsdl.php?srv=intercomunicacaoUnificada3.0')
+
+    # E-Proc 2G WSDL
+    EPROC_2G_WSDL = os.getenv('EPROC_2G_WSDL', 'https://eproc2g.tjsp.jus.br/eproc/ws/intercomunicacao2.2/wsdl/servico-intercomunicacao-2.2.2.wsdl')
     
     # Azure OpenAI - usando as variáveis do seu .env
     AZURE_OPENAI_API_KEY = os.getenv('AZURE_OPENAI_API_KEY', '')
