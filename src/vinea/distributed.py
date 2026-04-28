@@ -96,10 +96,10 @@ def parse_distributed(file_path: str):
         df3 = extract_observations(pagina_text)
         df3["pagina_pdf"] = pagina + 1
 
-        if meta.group(2):
+        if meta and meta.group(2):
             df3["instancia"] = meta.group(1).strip()
             df3["area"] = meta.group(2).strip()
-        elif meta.group(1):
+        elif meta and meta.group(1):
             df3["area"] = meta.group(1).strip()
 
         df = pd.concat([df, df3], axis=0)
