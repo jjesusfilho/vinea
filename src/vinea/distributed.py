@@ -1,14 +1,12 @@
 
 """Module for listing and downloading distributed PDF files from TJSP."""
 
-import subprocess
-import io
 import pandas as pd
 import re
 import requests
 from lxml import html
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 from datetime import datetime
 import numpy as np
 from pypdf import PdfReader
@@ -62,7 +60,10 @@ def parse_distributed(file_path: str):
     # Use pdfminer only for the first page header: it reconstructs text spacing correctly
     first_page_header = extract_text(file_path, page_numbers=[0])
 
-    dt_distribuicao = re.search(regex_dt, first_page_header).group()
+    dt_match = re.search(regex_dt, first_page_header)
+    dt_distribuicao = (
+        datetime.strptime(dt_match.group(), "%d/%m/%Y").date() if dt_match else None
+    )
     meta_match = re.search(regex_instancia, first_page_header, re.DOTALL)
     meta = meta_match.group() if meta_match else first_page_header
     sistema = re.search("(?<=Sistema ).+", meta).group()
@@ -75,7 +76,7 @@ def parse_distributed(file_path: str):
     area = area_match.group().strip() if area_match else np.nan
 
     capa = {
-        "dt_distribuicao": datetime.strptime(dt_distribuicao, "%d/%m/%Y").date(),
+        "dt_distribuicao": dt_distribuicao,
         "sistema": sistema,
         "instancia": instancia,
         "area": area,
