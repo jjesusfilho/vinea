@@ -68,8 +68,8 @@ df_localizacao = parser.mpu_para_df_localizacao(mpu_data)  # Endereços + coorde
    TJSPMNISENHA=sua_senha
 
    # E-Proc (1G e 2G)
-   EPROC_USUARIO=CAO_CAEx_Consulta_MP
-   EPROC_PASSWORD_SECRET=***REMOVIDO-SEGREDO-EPROC***  # Segredo para geração de senha SHA-256
+   EPROC_USUARIO=seu_usuario
+   EPROC_PASSWORD_SECRET=seu_segredo  # Segredo para geração de senha SHA-256
 
    # Azure OpenAI (para extração de MPUs)
    AZURE_OPENAI_API_KEY=sua_chave

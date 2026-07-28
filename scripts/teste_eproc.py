@@ -37,9 +37,9 @@ def main():
         print(f"Senha gerada para hoje: {senha}")
     except ValueError as e:
         print(f"\nERRO: {e}")
-        print("\nConfigurando .env com o segredo fornecido...")
+        print("\nConfigure o .env com o segredo do E-Proc:")
         print("Adicione ao seu arquivo .env:")
-        print("EPROC_PASSWORD_SECRET=***REMOVIDO-SEGREDO-EPROC***")
+        print("EPROC_PASSWORD_SECRET=seu_segredo")
         return
 
     print("\n" + "-" * 70)

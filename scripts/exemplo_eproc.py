@@ -7,6 +7,8 @@ Este script demonstra como usar o cliente MNI com os diferentes sistemas:
 - E-Proc 2G (2ª Instância)
 """
 
+import os
+
 from vinea import (
     create_esaj_client,
     create_eproc1g_client,
@@ -67,7 +69,7 @@ def exemplo_eproc1g():
     usuario_eproc = "CAO_CAEx_Consulta_MP"
 
     # A senha será gerada automaticamente baseada na data atual
-    # Formato: SHA256(DD-MM-AAAA + "***REMOVIDO-SEGREDO-EPROC***")
+    # Formato: SHA256(DD-MM-AAAA + segredo do .env)
     print(f"Senha gerada para hoje: {generate_eproc_password()}")
 
     # Opção 1: Usando factory method com senha automática (recomendado)
@@ -168,9 +170,9 @@ def exemplo_geracao_senha():
     senha_data = generate_eproc_password(date=data_especifica)
     print(f"Senha para 13/04/2026: {senha_data}")
 
-    # Mostrando o formato da entrada antes do hash
+    # Mostrando o formato da entrada antes do hash (segredo lido do .env)
     date_str = datetime.now().strftime("%d-%m-%Y")
-    secret = "***REMOVIDO-SEGREDO-EPROC***"
+    secret = os.getenv("EPROC_PASSWORD_SECRET")
     print(f"\nFormato da entrada: {date_str}{secret}")
 
 
