@@ -8,7 +8,6 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "azure-identity>=1.25.3",
     "duckdb>=1.3.2",
     "pandas>=2.3.3",
     "pyodbc>=5.2.0",
@@ -24,13 +23,24 @@ dependencies = [
     "pdfminer-six>=20251230",
 ]
 
+[project.optional-dependencies]
+# Só para FabricJobClient (execução remota de notebooks). Mantido fora das
+# dependências principais de propósito: instalar azure-identity dentro de um
+# notebook do Fabric (via %pip install vinea) pode colidir com a versão de
+# azure-core/azure-storage-blob que o próprio runtime Spark do Fabric usa
+# internamente (ex.: RemoteShuffleManagerGluten), derrubando a sessão inteira.
+# Use `vinea[fabric]` só em ambientes fora do Fabric (orquestradores locais).
+fabric = [
+    "azure-identity>=1.25.3",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "vinea",
+    "vinea[fabric]",
 ]
 
 [tool.uv.sources]

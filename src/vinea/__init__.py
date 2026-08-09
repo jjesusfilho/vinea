@@ -10,7 +10,6 @@ from .consulta import (
 )
 from .leitura import MNIParser
 from .inf_web_service import TPUClient
-from .fabric import FabricJobClient, FabricJobError
 
 __all__ = [
     'MNIClient',
@@ -22,6 +21,14 @@ __all__ = [
     'create_eproc1g_client',
     'create_eproc2g_client',
     'generate_eproc_password',
-    'FabricJobClient',
-    'FabricJobError',
 ]
+
+# FabricJobClient depende de azure-identity, instalado só com o extra
+# `vinea[fabric]` (ver pyproject.toml). Import condicional para que
+# `import vinea` continue funcionando em ambientes sem esse extra (ex.:
+# notebooks do Fabric que só usam MNIClient/MNIParser).
+try:
+    from .fabric import FabricJobClient, FabricJobError
+    __all__ += ['FabricJobClient', 'FabricJobError']
+except ImportError:
+    pass
