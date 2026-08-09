@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 
 try:
     import pdfplumber
@@ -56,14 +56,22 @@ class InfracionalExtractor:
         self.azure_openai_api_version = azure_openai_api_version or os.getenv("AZURE_OPENAI_VERSAO_API", "2024-02-01")
 
         if self.azure_openai_endpoint and self.azure_openai_key:
-            if not self.azure_openai_endpoint.startswith("https://"):
-                self.azure_openai_endpoint = f"https://{self.azure_openai_endpoint}.openai.azure.com"
-
-            self.openai_client = AzureOpenAI(
-                api_key=self.azure_openai_key,
-                api_version=self.azure_openai_api_version,
-                azure_endpoint=self.azure_openai_endpoint,
-            )
+            if self.azure_openai_endpoint.startswith("https://"):
+                # URL completa (ex.: endpoint "v1" do Azure AI Foundry,
+                # .../openai/v1) — client OpenAI padrão, compatível com essa
+                # API mais nova, sem api_version por chamada.
+                self.openai_client = OpenAI(
+                    base_url=self.azure_openai_endpoint,
+                    api_key=self.azure_openai_key,
+                )
+            else:
+                # Nome "nu" do resource — endpoint clássico do Azure OpenAI.
+                classic_endpoint = f"https://{self.azure_openai_endpoint}.openai.azure.com"
+                self.openai_client = AzureOpenAI(
+                    api_key=self.azure_openai_key,
+                    api_version=self.azure_openai_api_version,
+                    azure_endpoint=classic_endpoint,
+                )
         else:
             self.openai_client = None
 
@@ -95,7 +103,7 @@ class InfracionalExtractor:
         numero_processo: str,
         textos_qualificacao: Optional[list[str]] = None,
         max_completion_tokens: int = 4000,
-        temperature: float = 0.1,
+        temperature: Optional[float] = None,
     ) -> ProcessoInfracionalData:
         """
         Extrai dados estruturados de um processo de ato infracional usando LLM.
@@ -108,7 +116,10 @@ class InfracionalExtractor:
                 houver — é onde normalmente está a qualificação completa
                 das pessoas, não no BO
             max_completion_tokens: Número máximo de tokens na resposta
-            temperature: Temperatura para geração (menor = mais determinístico)
+            temperature: Temperatura para geração (menor = mais determinístico).
+                None (padrão) não envia o parâmetro — modelos de raciocínio
+                (ex.: GPT-5, o1/o3) só aceitam o valor default e retornam erro
+                se `temperature` for informado.
 
         Returns:
             Objeto ProcessoInfracionalData com os dados extraídos
@@ -148,6 +159,10 @@ TEXTO DO PROCESSO:
 
 Retorne o JSON estruturado com os dados extraídos:"""
 
+        kwargs = {}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
         response = self.openai_client.chat.completions.create(
             model=self.azure_openai_deployment,
             messages=[
@@ -157,9 +172,9 @@ Retorne o JSON estruturado com os dados extraídos:"""
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=temperature,
             max_completion_tokens=max_completion_tokens,
             response_format={"type": "json_object"},
+            **kwargs,
         )
 
         json_str = response.choices[0].message.content
