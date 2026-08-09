@@ -99,8 +99,14 @@ class FabricJobClient:
         return location.rstrip("/").rsplit("/", 1)[-1]
 
     def status_job(self, workspace_id: str, notebook_id: str, job_id: str) -> dict:
-        """Consulta o status atual de uma instância de job."""
-        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{notebook_id}/jobs/instances/{job_id}"
+        """
+        Consulta o status atual de uma instância de job.
+
+        Usa `?beta=true` para incluir o campo `exitValue` (definido via
+        `mssparkutils.notebook.exit(...)` dentro do notebook), hoje em beta
+        na API.
+        """
+        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{notebook_id}/jobs/instances/{job_id}?beta=true"
         resposta = requests.get(url, headers=self._headers(), timeout=30)
         resposta.raise_for_status()
         return resposta.json()
