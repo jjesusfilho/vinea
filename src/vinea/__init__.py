@@ -10,6 +10,7 @@ from .consulta import (
 )
 from .leitura import MNIParser
 from .inf_web_service import TPUClient
+from .fabric import FabricJobClient, FabricJobError
 
 __all__ = [
     'MNIClient',
@@ -21,4 +22,6 @@ __all__ = [
     'create_eproc1g_client',
     'create_eproc2g_client',
     'generate_eproc_password',
+    'FabricJobClient',
+    'FabricJobError',
 ]
