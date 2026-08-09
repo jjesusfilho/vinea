@@ -10,6 +10,15 @@ FABRIC_API_SCOPE = "https://api.fabric.microsoft.com/.default"
 STATUS_FINAIS = ("Completed", "Failed", "Cancelled", "Deduped")
 
 
+def _tipo_parametro(valor: Any) -> str:
+    """Infere o ItemJobParameterType da API a partir do tipo Python do valor."""
+    if isinstance(valor, bool):
+        return "Boolean"
+    if isinstance(valor, (int, float)):
+        return "Number"
+    return "Text"
+
+
 class FabricJobError(Exception):
     """Erro ao disparar ou executar um job de item do Fabric."""
 
@@ -53,9 +62,11 @@ class FabricJobClient:
         Args:
             workspace_id: ID do workspace onde está o notebook
             notebook_id: ID do item Notebook
-            parameters: Parâmetros da célula "parameters" do notebook, no
-                formato {"nome": {"value": ..., "type": "string"}}
-            configuration: Configuração de execução (ex.: {"defaultLakehouse": {...}})
+            parameters: Valores para a célula "parameters" do notebook, no
+                formato {"nome": valor} — o tipo (Text/Number/Boolean) é
+                inferido automaticamente do tipo Python de cada valor.
+            configuration: Configuração de execução (ex.: {"defaultLakehouse": {...}}),
+                enviada em executionData
 
         Returns:
             job_id da instância de execução disparada
@@ -66,12 +77,14 @@ class FabricJobClient:
         """
         url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{notebook_id}/jobs/instances?jobType=RunNotebook"
 
-        execution_data = {}
-        if parameters:
-            execution_data["parameters"] = parameters
+        body: dict[str, Any] = {}
         if configuration:
-            execution_data["configuration"] = configuration
-        body = {"executionData": execution_data} if execution_data else {}
+            body["executionData"] = configuration
+        if parameters:
+            body["parameters"] = [
+                {"name": nome, "type": _tipo_parametro(valor), "value": valor}
+                for nome, valor in parameters.items()
+            ]
 
         resposta = requests.post(url, headers=self._headers(), json=body, timeout=30)
         if resposta.status_code != 202:
