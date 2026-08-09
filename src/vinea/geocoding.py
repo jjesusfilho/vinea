@@ -272,6 +272,41 @@ class Geocoder:
                 error=f"Erro ao geocodificar CEP: {e}"
             )
 
+    def geocode_com_fallback(
+        self,
+        street: Optional[str],
+        neighborhood: Optional[str],
+        municipality: Optional[str],
+        cep: Optional[str]
+    ) -> GeocodingResult:
+        """
+        Geocodifica tentando primeiro o endereço completo, depois o CEP,
+        depois só o município. Compartilhado entre os geocodificadores
+        especializados (MPU, ato infracional etc.) para não duplicar essa
+        lógica de fallback em cada um.
+        """
+        if street or neighborhood:
+            result = self.geocode_address(
+                street=street,
+                neighborhood=neighborhood,
+                municipality=municipality,
+                cep=cep
+            )
+            if result.success:
+                return result
+
+        if cep and municipality:
+            result = self.geocode_cep(cep, municipality)
+            if result.success:
+                return result
+
+        if municipality:
+            result = self.geocode_address(municipality=municipality, state="São Paulo")
+            if result.success:
+                return result
+
+        return GeocodingResult(success=False, error="Não foi possível geocodificar")
+
 
 class MPUGeocoder:
     """Geocodificador especializado para dados de MPUs."""
@@ -357,37 +392,65 @@ class MPUGeocoder:
         municipality: Optional[str],
         cep: Optional[str]
     ) -> GeocodingResult:
+        """Geocodifica uma localização com fallback endereço → CEP → município."""
+        return self.geocoder.geocode_com_fallback(street, neighborhood, municipality, cep)
+
+
+class ProcessoInfracionalGeocoder:
+    """
+    Geocodificador especializado para dados de processos de ato infracional
+    (`ProcessoInfracionalData`). Diferente do `MPUGeocoder` (endereços fixos),
+    aqui os endereços vêm em listas — um por boletim de ocorrência (local do
+    fato) e um por pessoa envolvida (residência) —, então itera sobre elas.
+    """
+
+    def __init__(self, user_agent: str = "vinea-infracional-extractor/1.0"):
+        self.geocoder = Geocoder(user_agent=user_agent)
+
+    def geocode_processo_addresses(self, processo_data) -> None:
         """
-        Geocodifica uma localização, tentando primeiro o endereço completo,
-        depois o CEP se o endereço falhar.
+        Geocodifica in-place os endereços de todos os boletins de ocorrência
+        (local do fato) e de todas as pessoas envolvidas (residência) de um
+        `ProcessoInfracionalData`.
         """
-        # Tenta com endereço completo primeiro
-        if street or neighborhood:
-            result = self.geocoder.geocode_address(
-                street=street,
-                neighborhood=neighborhood,
-                municipality=municipality,
-                cep=cep
+        municipality_padrao = None
+        for bo in processo_data.boletins_ocorrencia or []:
+            if bo.endereco_fato_cidade:
+                municipality_padrao = bo.endereco_fato_cidade
+                break
+
+        for bo in processo_data.boletins_ocorrencia or []:
+            if not (bo.endereco_fato_rua or bo.endereco_fato_cep):
+                continue
+            municipio = bo.endereco_fato_cidade or municipality_padrao
+            print(f"  Geocodificando local do fato (boletim {bo.numero_boletim})...")
+            resultado = self.geocoder.geocode_com_fallback(
+                street=bo.endereco_fato_rua,
+                neighborhood=bo.endereco_fato_bairro,
+                municipality=municipio,
+                cep=bo.endereco_fato_cep,
             )
-            if result.success:
-                return result
+            if resultado.success:
+                bo.endereco_fato_latitude = resultado.latitude
+                bo.endereco_fato_longitude = resultado.longitude
+                print(f"    ✓ {resultado.latitude}, {resultado.longitude}")
+            else:
+                print(f"    ✗ {resultado.error}")
 
-        # Se falhou ou não tem endereço, tenta com CEP
-        if cep and municipality:
-            result = self.geocoder.geocode_cep(cep, municipality)
-            if result.success:
-                return result
-
-        # Se ainda falhou, tenta só com o município
-        if municipality:
-            result = self.geocoder.geocode_address(
-                municipality=municipality,
-                state="São Paulo"
+        for pessoa in processo_data.pessoas or []:
+            if not (pessoa.endereco_rua or pessoa.endereco_cep):
+                continue
+            municipio = pessoa.endereco_cidade or municipality_padrao
+            print(f"  Geocodificando residência ({pessoa.categoria}, {pessoa.nome})...")
+            resultado = self.geocoder.geocode_com_fallback(
+                street=pessoa.endereco_rua,
+                neighborhood=pessoa.endereco_bairro,
+                municipality=municipio,
+                cep=pessoa.endereco_cep,
             )
-            if result.success:
-                return result
-
-        return GeocodingResult(
-            success=False,
-            error="Não foi possível geocodificar"
-        )
+            if resultado.success:
+                pessoa.endereco_latitude = resultado.latitude
+                pessoa.endereco_longitude = resultado.longitude
+                print(f"    ✓ {resultado.latitude}, {resultado.longitude}")
+            else:
+                print(f"    ✗ {resultado.error}")
