@@ -55,6 +55,7 @@ class FabricJobClient:
         notebook_id: str,
         parameters: Optional[dict[str, Any]] = None,
         configuration: Optional[dict[str, Any]] = None,
+        habilitar_pip_install: bool = False,
     ) -> str:
         """
         Dispara a execução sob demanda de um notebook do Fabric.
@@ -67,6 +68,12 @@ class FabricJobClient:
                 inferido automaticamente do tipo Python de cada valor.
             configuration: Configuração de execução (ex.: {"defaultLakehouse": {...}}),
                 enviada em executionData
+            habilitar_pip_install: `%pip install` vem desabilitado por padrão em
+                execuções não-interativas (via esta API ou via pipeline) — só
+                funciona rodando manual na UI do Fabric. Se o notebook tiver uma
+                célula `%pip install`, passe True aqui para evitar
+                `MagicUsageError`. Ver
+                https://learn.microsoft.com/en-us/fabric/data-engineering/library-management#inline-installation
 
         Returns:
             job_id da instância de execução disparada
@@ -77,13 +84,17 @@ class FabricJobClient:
         """
         url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{notebook_id}/jobs/instances?jobType=RunNotebook"
 
+        todos_parametros = dict(parameters) if parameters else {}
+        if habilitar_pip_install:
+            todos_parametros["_inlineInstallationEnabled"] = True
+
         body: dict[str, Any] = {}
         if configuration:
             body["executionData"] = configuration
-        if parameters:
+        if todos_parametros:
             body["parameters"] = [
                 {"name": nome, "type": _tipo_parametro(valor), "value": valor}
-                for nome, valor in parameters.items()
+                for nome, valor in todos_parametros.items()
             ]
 
         resposta = requests.post(url, headers=self._headers(), json=body, timeout=30)
@@ -157,11 +168,15 @@ class FabricJobClient:
         notebook_id: str,
         parameters: Optional[dict[str, Any]] = None,
         configuration: Optional[dict[str, Any]] = None,
+        habilitar_pip_install: bool = False,
         intervalo_segundos: int = 10,
         timeout_segundos: int = 1800,
     ) -> dict:
         """
         Dispara um notebook e aguarda a conclusão, numa única chamada.
+
+        Args:
+            habilitar_pip_install: ver `disparar_notebook`.
 
         Returns:
             Corpo da resposta final da API
@@ -169,7 +184,9 @@ class FabricJobClient:
         Raises:
             FabricJobError: se o job terminar com status diferente de "Completed"
         """
-        job_id = self.disparar_notebook(workspace_id, notebook_id, parameters, configuration)
+        job_id = self.disparar_notebook(
+            workspace_id, notebook_id, parameters, configuration, habilitar_pip_install
+        )
         resultado = self.aguardar_job(
             workspace_id, notebook_id, job_id, intervalo_segundos, timeout_segundos
         )
