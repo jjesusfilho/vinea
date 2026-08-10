@@ -366,3 +366,83 @@ Retorne o JSON estruturado com os dados extraídos:"""
             raise ValueError(f"Formato não suportado: {format}")
 
         print(f"Dados do processo salvos em: {output_path}")
+
+    def classificar_naturezas(
+        self,
+        naturezas: list[str],
+        taxonomia: list[str],
+        tamanho_lote: int = 40,
+        max_completion_tokens: int = 4000,
+    ) -> dict[str, Optional[str]]:
+        """
+        Classifica valores de `natureza` (texto livre, extraído dos BOs)
+        contra uma taxonomia de referência (ex.: árvore "Ato Infracional"
+        da Tabela Processual Unificada do CNJ, via `vinea.TPUClient`) —
+        pensado pra reduzir o número de variações de texto que descrevem o
+        mesmo tipo de ato infracional (ver CLAUDE.md do projeto infancia).
+
+        Classifica os valores DISTINTOS (ex.: os de `dim_natureza`), não
+        cada ocorrência — é uma tabela de/para pequena, não algo por linha
+        de fato.
+
+        Args:
+            naturezas: Lista de valores distintos de `natureza` a classificar
+            taxonomia: Lista de categorias de referência (ex.: nomes dos nós
+                da árvore retornada por `TPUClient.get_arvore_completa`)
+            tamanho_lote: Quantas naturezas mandar por chamada ao LLM
+            max_completion_tokens: Tokens máximos por chamada
+
+        Returns:
+            Dict mapeando cada natureza original para a categoria da
+            taxonomia mais próxima, ou `None` se nenhuma categoria for uma
+            correspondência razoável (fica pra revisão manual depois).
+        """
+        if not self.openai_client:
+            raise ValueError(
+                "Azure OpenAI não foi configurado. "
+                "Forneça azure_openai_endpoint, azure_openai_key e azure_openai_deployment."
+            )
+
+        lista_taxonomia = "\n".join(f"- {c}" for c in taxonomia)
+        resultado: dict[str, Optional[str]] = {}
+
+        for inicio in range(0, len(naturezas), tamanho_lote):
+            lote = naturezas[inicio : inicio + tamanho_lote]
+            lista_naturezas = "\n".join(f"{i}. {n}" for i, n in enumerate(lote))
+
+            prompt = f"""Você é um assistente especializado em classificação de atos infracionais (infância e juventude) conforme a Tabela Processual Unificada do CNJ.
+
+CATEGORIAS DE REFERÊNCIA (escolha sempre uma destas, exatamente como escrita, ou null se nenhuma for uma correspondência razoável):
+{lista_taxonomia}
+
+Para cada item da lista abaixo (textos livres extraídos de boletins de ocorrência, descrevendo o ato infracional), identifique a categoria de referência que melhor corresponde.
+
+ITENS A CLASSIFICAR:
+{lista_naturezas}
+
+Retorne APENAS um JSON no formato {{"0": "categoria ou null", "1": "categoria ou null", ...}}, usando o índice de cada item como chave."""
+
+            resposta = self.openai_client.chat.completions.create(
+                model=self.azure_openai_deployment,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Você é um assistente especializado em classificação de atos infracionais. Retorne apenas JSON válido.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_completion_tokens=max_completion_tokens,
+                response_format={"type": "json_object"},
+            )
+
+            try:
+                mapa_indices = json.loads(resposta.choices[0].message.content)
+            except Exception as e:
+                print(f"Erro ao parsear classificação do lote {inicio}: {e}")
+                mapa_indices = {}
+
+            for i, natureza in enumerate(lote):
+                categoria = mapa_indices.get(str(i))
+                resultado[natureza] = categoria if categoria and categoria != "null" else None
+
+        return resultado
