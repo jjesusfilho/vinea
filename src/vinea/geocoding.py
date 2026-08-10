@@ -272,6 +272,25 @@ class Geocoder:
                 error=f"Erro ao geocodificar CEP: {e}"
             )
 
+    @staticmethod
+    def _normaliza_campo(valor) -> Optional[str]:
+        """
+        Normaliza um campo de endereço vindo de `DataFrame.toPandas()`.
+
+        Uma coluna Spark do tipo string, quando totalmente nula num lote,
+        vira `float64`/`NaN` (não `None`) ao converter pra pandas — sem
+        essa normalização, `", ".join(query_parts)` estoura
+        `TypeError: sequence item N: expected str instance, float found`.
+        """
+        if valor is None:
+            return None
+        if isinstance(valor, float) and valor != valor:  # NaN
+            return None
+        if not isinstance(valor, str):
+            valor = str(valor)
+        valor = valor.strip()
+        return valor or None
+
     def geocode_com_fallback(
         self,
         street: Optional[str],
@@ -285,6 +304,11 @@ class Geocoder:
         especializados (MPU, ato infracional etc.) para não duplicar essa
         lógica de fallback em cada um.
         """
+        street = self._normaliza_campo(street)
+        neighborhood = self._normaliza_campo(neighborhood)
+        municipality = self._normaliza_campo(municipality)
+        cep = self._normaliza_campo(cep)
+
         if street or neighborhood:
             result = self.geocode_address(
                 street=street,
