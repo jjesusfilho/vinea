@@ -367,12 +367,15 @@ Retorne o JSON estruturado com os dados extraídos:"""
 
         print(f"Dados do processo salvos em: {output_path}")
 
+    CATEGORIA_NAO_CRIMINAL = "Não Criminal / Procedimento"
+
     def classificar_naturezas(
         self,
         naturezas: list[str],
         taxonomia: list[str],
         tamanho_lote: int = 40,
         max_completion_tokens: int = 4000,
+        categoria_nao_criminal: Optional[str] = CATEGORIA_NAO_CRIMINAL,
     ) -> dict[str, Optional[str]]:
         """
         Classifica valores de `natureza` (texto livre, extraído dos BOs)
@@ -391,11 +394,18 @@ Retorne o JSON estruturado com os dados extraídos:"""
                 da árvore retornada por `TPUClient.get_arvore_completa`)
             tamanho_lote: Quantas naturezas mandar por chamada ao LLM
             max_completion_tokens: Tokens máximos por chamada
+            categoria_nao_criminal: Rótulo comum pra itens que não são tipo
+                de ato infracional (procedimento policial/administrativo —
+                ex.: "Cumprimento de mandado de busca e apreensão",
+                "Comunicação de Óbito", "Captura de procurado"). Passe
+                `None` pra desativar e deixar esses casos como `None`
+                também (comportamento anterior).
 
         Returns:
             Dict mapeando cada natureza original para a categoria da
-            taxonomia mais próxima, ou `None` se nenhuma categoria for uma
-            correspondência razoável (fica pra revisão manual depois).
+            taxonomia mais próxima, `categoria_nao_criminal` se for um
+            procedimento não-criminal, ou `None` se nada disso se aplicar
+            (fica pra revisão manual depois).
         """
         if not self.openai_client:
             raise ValueError(
@@ -406,6 +416,12 @@ Retorne o JSON estruturado com os dados extraídos:"""
         lista_taxonomia = "\n".join(f"- {c}" for c in taxonomia)
         resultado: dict[str, Optional[str]] = {}
 
+        instrucao_nao_criminal = (
+            f"""Se o item descrever um procedimento policial/administrativo que NÃO é em si um tipo de ato infracional (ex.: cumprimento de mandado, captura de procurado, comunicação de óbito, apreensão/localização/entrega de objeto ou de adolescente), classifique como "{categoria_nao_criminal}" em vez de tentar encaixar numa categoria da lista ou usar null."""
+            if categoria_nao_criminal
+            else ""
+        )
+
         for inicio in range(0, len(naturezas), tamanho_lote):
             lote = naturezas[inicio : inicio + tamanho_lote]
             lista_naturezas = "\n".join(f"{i}. {n}" for i, n in enumerate(lote))
@@ -415,7 +431,7 @@ Retorne o JSON estruturado com os dados extraídos:"""
 CATEGORIAS DE REFERÊNCIA (escolha sempre uma destas, exatamente como escrita, ou null se nenhuma for uma correspondência razoável):
 {lista_taxonomia}
 
-Para cada item da lista abaixo (textos livres extraídos de boletins de ocorrência, descrevendo o ato infracional), identifique a categoria de referência que melhor corresponde.
+Para cada item da lista abaixo (textos livres extraídos de boletins de ocorrência, descrevendo o ato infracional), identifique a categoria de referência que melhor corresponde. {instrucao_nao_criminal}
 
 ITENS A CLASSIFICAR:
 {lista_naturezas}
