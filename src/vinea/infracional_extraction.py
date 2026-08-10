@@ -4,8 +4,11 @@ partir do Boletim de Ocorrência e dos documentos de qualificação das
 partes, usando Azure OpenAI.
 """
 
+import base64
+import io
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional, Union
 
@@ -18,6 +21,8 @@ except ImportError:
     PDFPLUMBER_AVAILABLE = False
 
 from .infracional_models import ProcessoInfracionalData, IdentificacaoProcesso
+
+PADRAO_CID = re.compile(r"\(cid:\d+\)")
 
 
 class InfracionalExtractor:
@@ -89,6 +94,103 @@ class InfracionalExtractor:
                     text_content.append(page_text)
 
         return "\n\n".join(text_content)
+
+    def transcrever_paginas_por_visao(
+        self,
+        pdf_path: Union[str, Path],
+        resolution: int = 200,
+        max_completion_tokens: int = 4000,
+    ) -> str:
+        """
+        Transcreve um PDF (provavelmente digitalizado/sem camada de texto)
+        renderizando cada página como imagem e enviando pro modelo de
+        visão do Azure OpenAI/AI Foundry — sem depender de Document
+        Intelligence nem de binário de OCR local (usa `pypdfium2`, que já
+        vem com o `pdfplumber`, sem dependência de sistema).
+
+        Args:
+            pdf_path: Caminho do PDF
+            resolution: DPI da renderização da página (200 costuma bastar)
+            max_completion_tokens: Tokens máximos por página transcrita.
+                Modelos de raciocínio (ex.: gpt-5.6-luna) gastam parte
+                desse orçamento em "pensamento" interno antes da resposta
+                visível — em teste real, uma página densa consumiu ~1600
+                tokens só de raciocínio; com 2000 no total a resposta veio
+                vazia, com 4000 veio completa. Não reduza sem testar.
+
+        Returns:
+            Texto transcrito, concatenado por página
+        """
+        if not self.openai_client:
+            raise ValueError(
+                "Azure OpenAI não foi configurado. "
+                "Forneça azure_openai_endpoint, azure_openai_key e azure_openai_deployment."
+            )
+
+        pdf_path = Path(pdf_path)
+        textos_paginas = []
+
+        with pdfplumber.open(pdf_path) as pdf:
+            for pagina in pdf.pages:
+                imagem = pagina.to_image(resolution=resolution)
+                buffer = io.BytesIO()
+                imagem.original.save(buffer, format="PNG")
+                b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+                resposta = self.openai_client.chat.completions.create(
+                    model=self.azure_openai_deployment,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Transcreva todo o texto legível desta imagem de um "
+                                        "documento judicial/policial, preservando a estrutura "
+                                        "(campos, seções, tabelas de pessoas). Se não conseguir "
+                                        "ler nada, responda apenas 'ILEGÍVEL'."
+                                    ),
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                                },
+                            ],
+                        }
+                    ],
+                    max_completion_tokens=max_completion_tokens,
+                )
+                textos_paginas.append(resposta.choices[0].message.content or "")
+
+        return "\n\n".join(textos_paginas)
+
+    def extract_text_com_fallback_visao(
+        self,
+        pdf_path: Union[str, Path],
+        min_chars: int = 50,
+    ) -> tuple[str, bool]:
+        """
+        Extrai texto do PDF; se vier insuficiente (provável documento
+        digitalizado sem camada de texto, ou fonte com encoding quebrado),
+        cai pra transcrição por visão (`transcrever_paginas_por_visao`).
+
+        Args:
+            pdf_path: Caminho do PDF
+            min_chars: Tamanho mínimo (após limpar ruído `(cid:N)`) do
+                texto extraído por `pdfplumber` pra considerar suficiente
+
+        Returns:
+            Tupla (texto, usou_visao) — `usou_visao` indica se caiu no
+            fallback, útil pra registrar isso na tabela de destino.
+        """
+        texto = self.extract_text_from_pdf(pdf_path)
+        texto_limpo = PADRAO_CID.sub("", texto).strip()
+
+        if len(texto_limpo) >= min_chars:
+            return texto, False
+
+        return self.transcrever_paginas_por_visao(pdf_path), True
 
     def _montar_texto_combinado(self, texto_bo: str, textos_qualificacao: Optional[list[str]]) -> str:
         """Combina o texto do BO com os textos de qualificação, com seções rotuladas."""
