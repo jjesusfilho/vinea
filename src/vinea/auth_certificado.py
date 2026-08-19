@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -20,9 +21,17 @@ import requests
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
-from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    pkcs12,
+)
 
 ESAJ_BASE_URL = "https://esaj.tjsp.jus.br"
+EPROC_BASE_URL = "https://eproc1g.tjsp.jus.br/eproc"
+SSO_HOST_PADRAO = "sso.tjsp.jus.br"
+SSO_HOST_CERTIFICADO = "certificado-sso.tjsp.jus.br"
 
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -167,6 +176,98 @@ def autenticar_certificado_esaj(
         raise AutenticacaoCertificadoError(
             "Login por certificado recusado pelo CAS do e-SAJ (verifique .pfx/senha "
             "e se o certificado está cadastrado no e-SAJ)."
+        )
+
+    return session
+
+
+def autenticar_certificado_eproc_tjsp(
+    pfx_path: Optional[str] = None,
+    pfx_password: Optional[str] = None,
+) -> requests.Session:
+    """
+    Autentica no e-Proc do TJSP com certificado digital A1 (.pfx) via TLS mútuo.
+
+    Diferente do e-SAJ (desafio-assinatura), o e-Proc autentica via Keycloak
+    com TLS mútuo real: a página de login normal (``sso.tjsp.jus.br``) tem um
+    botão "Certificado Digital" que apenas troca o host da MESMA URL de login
+    (mesmos ``session_code``/``execution``) para ``certificado-sso.tjsp.jus.br``
+    — esse host exige o certificado do cliente na própria negociação TLS
+    (confirmado com ``openssl s_client``: o host normal não manda
+    ``CertificateRequest``, o host de certificado manda, com CAs ICP-Brasil
+    aceitas).
+
+    Usa ``requests`` (OpenSSL) para o handshake com certificado — bibliotecas
+    baseadas em BoringSSL (ex. ``curl_cffi``) desabilitam renegociação TLS
+    clássica, o mesmo cuidado que o login por certificado do TRF2 já toma no
+    pacote `videre`.
+
+    Args:
+        pfx_path: Caminho do arquivo .pfx/.p12. Se omitido, usa a variável
+            de ambiente ``CERTIFICADOTJSP``.
+        pfx_password: Senha do certificado. Se omitida, usa a variável de
+            ambiente ``SENHACERTIFICADO``.
+
+    Returns:
+        `requests.Session` autenticada (cookies de sessão do e-Proc), pronta
+        para requisições em `eproc1g.tjsp.jus.br/eproc/`.
+
+    Raises:
+        AutenticacaoCertificadoError: certificado inválido/senha incorreta,
+            página de login do Keycloak não encontrada, ou certificado
+            recusado pelo e-Proc.
+
+    Example:
+        >>> session = autenticar_certificado_eproc_tjsp()
+        >>> resp = session.get(f"{EPROC_BASE_URL}/controlador.php")
+    """
+    pfx_path, pfx_password = _resolver_credenciais(pfx_path, pfx_password)
+    key, cert = _carregar_pfx(pfx_path, pfx_password)
+
+    cert_dir = Path(tempfile.mkdtemp(prefix="vinea_cert_eproc_"))
+    os.chmod(cert_dir, 0o700)
+    cert_pem = cert_dir / "cert.pem"
+    key_pem = cert_dir / "key.pem"
+    cert_pem.write_bytes(cert.public_bytes(Encoding.PEM))
+    os.chmod(cert_pem, 0o600)
+    key_pem.write_bytes(
+        key.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
+    )
+    os.chmod(key_pem, 0o600)
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.9",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "User-Agent": _USER_AGENT,
+        }
+    )
+
+    # Navega o fluxo OIDC normal (sem certificado ainda) até a tela de login
+    # do Keycloak — é lá que vêm session_code/execution que o botão
+    # "Certificado Digital" reaproveita ao trocar de host.
+    resp = session.get(f"{EPROC_BASE_URL}/", timeout=30, allow_redirects=True)
+    login_url = resp.url
+    if SSO_HOST_PADRAO not in login_url:
+        raise AutenticacaoCertificadoError(
+            f"Não caiu na página de login do Keycloak (URL final: {login_url}); "
+            "o fluxo de SSO do e-Proc pode ter mudado."
+        )
+
+    cert_login_url = login_url.replace(SSO_HOST_PADRAO, SSO_HOST_CERTIFICADO, 1)
+
+    # A partir daqui a sessão apresenta o certificado na própria negociação
+    # TLS — é isso, e não um campo de formulário, que autentica no Keycloak.
+    session.cert = (str(cert_pem), str(key_pem))
+    resp = session.get(cert_login_url, timeout=30, allow_redirects=True)
+
+    if "painel" not in resp.url.lower() and "acao=principal" not in resp.url:
+        raise AutenticacaoCertificadoError(
+            "Certificado não aceito pelo e-Proc do TJSP (verifique se está "
+            "cadastrado no e-Proc; se a sessão do Keycloak não sobreviver à "
+            "troca de host, pode ser necessário copiar cookies entre "
+            f"{SSO_HOST_PADRAO} e {SSO_HOST_CERTIFICADO} antes deste passo)."
         )
 
     return session

@@ -1,6 +1,7 @@
 # vinea/__init__.py
 from .auth_certificado import (
     AutenticacaoCertificadoError,
+    autenticar_certificado_eproc_tjsp,
     autenticar_certificado_esaj,
 )
 from .consulta import (
@@ -27,6 +28,7 @@ __all__ = [
     'generate_eproc_password',
     'AutenticacaoCertificadoError',
     'autenticar_certificado_esaj',
+    'autenticar_certificado_eproc_tjsp',
 ]
 
 # FabricJobClient depende de azure-identity, instalado só com o extra
