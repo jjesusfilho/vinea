@@ -21,6 +21,7 @@ dependencies = [
     "pdfplumber>=0.11.0",
     "pypdf>=6.9.2",
     "pdfminer-six>=20251230",
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,8 @@
 # vinea/__init__.py
+from .auth_certificado import (
+    AutenticacaoCertificadoError,
+    autenticar_certificado_esaj,
+)
 from .consulta import (
     MNIClient,
     SystemType,
@@ -21,6 +25,8 @@ __all__ = [
     'create_eproc1g_client',
     'create_eproc2g_client',
     'generate_eproc_password',
+    'AutenticacaoCertificadoError',
+    'autenticar_certificado_esaj',
 ]
 
 # FabricJobClient depende de azure-identity, instalado só com o extra
