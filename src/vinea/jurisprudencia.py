@@ -333,7 +333,21 @@ class EprocJurisprudenciaClient:
         )
 
     def _parsear_resultado(self, cartao) -> dict:
+        id_documento = cartao.get("id")
+
         def _texto_label(rotulo: str) -> Optional[str]:
+            # Campos longos (DECISÃO, EMENTA) vêm truncados em ~5000
+            # caracteres num <div class="resValue limitado">, com o texto
+            # completo já presente na página, só oculto via CSS, num
+            # <div id="campo-completo-{id}-{rotulo}">. Preferir sempre esse,
+            # quando existir, para não cortar o dispositivo de sentenças
+            # longas.
+            completo = cartao.xpath(f".//div[@id='campo-completo-{id_documento}-{rotulo}']")
+            if completo:
+                texto = completo[0].text_content().strip()
+                if texto:
+                    return texto
+
             valores = cartao.xpath(
                 f".//div[@class='resLabel' and normalize-space(text())='{rotulo}']"
                 "/following-sibling::div[contains(@class,'resValue')][1]"
@@ -356,7 +370,6 @@ class EprocJurisprudenciaClient:
 
         tipo_documento = cartao.xpath(".//div[@class='resValueTipoJurisprudencia']/text()")
         citacao = cartao.xpath(".//a[contains(@class,'copiarCitacao')]/@data-citacao")
-        id_documento = cartao.get("id")
 
         resultado = {
             "id_documento": id_documento,
