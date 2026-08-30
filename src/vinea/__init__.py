@@ -15,6 +15,7 @@ from .consulta import (
 )
 from .leitura import MNIParser
 from .inf_web_service import TPUClient
+from .jurisprudencia import EprocJurisprudenciaClient, PaginaResultadosJurisprudencia
 
 __all__ = [
     'MNIClient',
@@ -29,6 +30,8 @@ __all__ = [
     'AutenticacaoCertificadoError',
     'autenticar_certificado_esaj',
     'autenticar_certificado_eproc_tjsp',
+    'EprocJurisprudenciaClient',
+    'PaginaResultadosJurisprudencia',
 ]
 
 # FabricJobClient depende de azure-identity, instalado só com o extra

@@ -14,6 +14,21 @@ Wrapper e parser Python sobre a interface SOAP MNI do TJSP para você:
 - analisar os XMLs salvos (como arquivos `.xml` isolados, caminhos ABFSS ou diretórios de shards de texto do Spark) em DataFrames pandas (`dados básicos`, `partes`, `movimentos`, `documentos`)
 - funciona com ou sem PySpark (modo simplificado disponível)
 
+## 🔹 Jurisprudência (e-Proc)
+
+Cliente HTTP para a busca pública de jurisprudência do e-Proc do TJSP (sem
+autenticação), que cobre 1º e 2º grau simultaneamente — sentenças, acórdãos e
+decisões monocráticas, incluindo Câmaras de Direito Privado/Público e as
+Turmas/Colégio Recursal do Juizado Especial:
+
+- busca por termo (frase exata), classe, relator, órgão julgador, número de
+  processo e período de julgamento ou de publicação
+- pagina automaticamente pelos resultados (`buscar_todas_paginas`)
+- como o portal não deixa navegar além de 1000 resultados por busca, estreite
+  o período para universos maiores (mesma lógica do CJPG/CJSG do e-SAJ)
+- reintentos com backoff embutidos: o portal responde 503 de forma
+  intermitente a requisições automatizadas
+
 ---
 
 ## Pré‑requisitos
@@ -116,6 +131,34 @@ movimentos_path = client_1g.baixar_movimentos(processo, save_dir="data/bronze/ep
 - O `MNIClient` salva XMLs usando Spark (`.coalesce(1).write.text`) quando uma sessão Spark estiver disponível.
 - **Atenção ao formato de ID**: passe exatamente os valores de `id_documento` (incluindo o sufixo `-1`), caso contrário nenhum binário será retornado.
 
+### Jurisprudência (e-Proc)
+
+```python
+from vinea import EprocJurisprudenciaClient
+
+cliente = EprocJurisprudenciaClient()
+
+# Uma página (10 resultados)
+pagina = cliente.buscar(
+    "cartão de crédito consignado",
+    data_publicacao_inicio="01/08/2026",
+    data_publicacao_fim="07/08/2026",
+)
+print(pagina.total_resultados, pagina.total_paginas)
+
+# Todas as páginas de uma busca, resultado a resultado
+for resultado in cliente.buscar_todas_paginas(
+    "cartão de crédito consignado",
+    data_publicacao_inicio="01/08/2026",
+    data_publicacao_fim="07/08/2026",
+):
+    print(resultado["numero_processo"], resultado["tipo_documento"], resultado["orgao_julgador"])
+```
+
+- `origem` (default `(3, 4, 5)`) e `tipo_documento` (default `(1, 2, 5)` = Acórdão, Decisão monocrática, Sentença) reproduzem a busca "1º e 2º grau, todos os tipos" observada no portal; use `carregar_listas_pesquisa`/`listar_tipo_documento` para descobrir outros valores.
+- Cada resultado traz `numero_processo` (20 dígitos), `tipo_documento`, `orgao_julgador`, `relator`, `data_julgamento`, `data_publicacao`, `decisao`, `ementa` e `link_consulta_publica`.
+- O portal limita a 1000 resultados (100 páginas) por busca; para universos maiores, estreite `data_julgamento_inicio`/`data_julgamento_fim` ou `data_publicacao_inicio`/`data_publicacao_fim` e faça buscas em janelas sucessivas, como já é feito para o CJPG/CJSG do e-SAJ.
+
 ## Análise dos XMLs salvos
 
 O `MNIParser` é um parser leve que pode usar Spark para ler arquivos e shards em local ou ABFSS. Ele aceita caminhos para:
@@ -138,11 +181,20 @@ movimentos_df = parser.ler_movimentos(movimentos_path)
 - `scripts/rotina_2_ler_lista_documentos.py`: lê cada arquivo em `data/bronze`, executa `MNIParser.ler_lista_documentos` e concatena DataFrames.
 - `scripts/rotina_3_ler_mni.py`: exemplo simples de chamada a `consultar_processo` seguido de parsing do cabeçalho.
 
+### Jurisprudência (e-Proc)
+- `scripts/teste_jurisprudencia.py`: exemplo simples de busca (`EprocJurisprudenciaClient.buscar`).
+
 ## Módulos Principais
 
 ### MNI Client
 - `src/vinea/consulta.py` - Cliente SOAP MNI (`MNIClient`)
 - `src/vinea/leitura.py` - Parser de XMLs (`MNIParser`)
+
+### Jurisprudência (e-Proc)
+- `src/vinea/jurisprudencia.py` - Cliente HTTP de busca de jurisprudência (`EprocJurisprudenciaClient`)
+
+### Tabelas Unificadas (CNJ)
+- `src/vinea/inf_web_service.py` - Cliente SOAP do SGT/CNJ (`TPUClient`)
 
 ### Configuração
 - `config.py` - Centraliza caminhos, credenciais e configurações
