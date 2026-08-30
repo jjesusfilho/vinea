@@ -140,7 +140,7 @@ cliente = EprocJurisprudenciaClient()
 
 # Uma página (10 resultados)
 pagina = cliente.buscar(
-    "cartão de crédito consignado",
+    '"cartão de crédito consignado"',  # aspas = frase exata; sem aspas, aceita operadores E/OU
     data_publicacao_inicio="01/08/2026",
     data_publicacao_fim="07/08/2026",
 )
@@ -148,7 +148,7 @@ print(pagina.total_resultados, pagina.total_paginas)
 
 # Todas as páginas de uma busca, resultado a resultado
 for resultado in cliente.buscar_todas_paginas(
-    "cartão de crédito consignado",
+    '"cartão de crédito consignado"',  # aspas = frase exata; sem aspas, aceita operadores E/OU
     data_publicacao_inicio="01/08/2026",
     data_publicacao_fim="07/08/2026",
 ):

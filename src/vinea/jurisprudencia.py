@@ -182,10 +182,8 @@ class EprocJurisprudenciaClient:
         if pagina < 1:
             raise ValueError("`pagina` deve ser >= 1.")
 
-        termo_formatado = f'"{termo}"' if termo else ""
-
         dados: list[tuple[str, str]] = [
-            ("txtPesquisa", termo_formatado),
+            ("txtPesquisa", termo or ""),
             ("hdnExibirPesquisaAvancada", ""),
             (
                 "hdnUrlCarregarListasCombobox",
@@ -245,8 +243,12 @@ class EprocJurisprudenciaClient:
         `buscar_todas_paginas`).
 
         Args:
-            termo: termo(s) de busca; é enviado entre aspas (busca por frase
-                exata), como a interface faz por padrão.
+            termo: termo(s) de busca; é enviado como texto literal para
+                `txtPesquisa`. Para busca por frase exata (o padrão da
+                interface), envolva o termo em aspas ao chamar (ex.:
+                `'"cartão de crédito consignado"'`); sem aspas, o portal
+                interpreta operadores booleanos (E/OU) e outras sintaxes de
+                busca livre.
             campo: "I" (inteiro teor, padrão) ou "E" (só ementa).
             pagina: página a buscar (1-based).
 

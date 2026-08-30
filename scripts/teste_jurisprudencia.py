@@ -4,7 +4,7 @@ from vinea import EprocJurisprudenciaClient
 cliente = EprocJurisprudenciaClient()
 
 pagina = cliente.buscar(
-    "cartao de credito consignado",
+    '"cartao de credito consignado"',
     data_publicacao_inicio="01/08/2026",
     data_publicacao_fim="07/08/2026",
 )
