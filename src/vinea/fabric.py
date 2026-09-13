@@ -43,6 +43,9 @@ class FabricJobClient:
             client_id: ID do aplicativo (service principal)
             client_secret: Segredo do aplicativo
         """
+        self._tenant_id = tenant_id
+        self._client_id = client_id
+        self._client_secret = client_secret
         self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
 
     def _headers(self) -> dict:
@@ -196,3 +199,148 @@ class FabricJobClient:
                 f"{resultado.get('failureReason')}"
             )
         return resultado
+
+    def _aguardar_operacao_lro(
+        self, operation_id: str, intervalo_segundos: int = 5, timeout_segundos: int = 300
+    ) -> dict:
+        """Aguarda uma long running operation genérica do Fabric (não a de job de notebook)."""
+        url = f"{FABRIC_API_BASE}/operations/{operation_id}"
+        decorrido = 0
+        while True:
+            resposta = requests.get(url, headers=self._headers(), timeout=30)
+            resposta.raise_for_status()
+            estado = resposta.json()
+            if estado.get("status") == "Succeeded":
+                return estado
+            if estado.get("status") == "Failed":
+                raise FabricJobError(f"Operação {operation_id} falhou: {estado.get('error')}")
+
+            if decorrido >= timeout_segundos:
+                raise TimeoutError(f"Operação {operation_id} não terminou em {timeout_segundos}s")
+
+            time.sleep(intervalo_segundos)
+            decorrido += intervalo_segundos
+
+    def criar_conexao_ado_service_principal(self, organizacao: str, projeto: str, repositorio: str) -> str:
+        """
+        Cria, no Fabric, uma conexão "Azure DevOps - Source Control" autenticada
+        com as próprias credenciais deste service principal (sem PAT). Passo
+        único de configuração, não precisa rodar de novo a cada sincronização.
+
+        Args:
+            organizacao: nome da organização do Azure DevOps (ex.: "mpsp")
+            projeto: nome do projeto no Azure DevOps
+            repositorio: nome do repositório git
+
+        Returns:
+            connection_id, usado depois em `configurar_credencial_git`
+        """
+        payload: dict[str, Any] = {
+            "displayName": f"ADO SP - {projeto}/{repositorio}",
+            "connectivityType": "ShareableCloud",
+            "connectionDetails": {
+                "creationMethod": "AzureDevOpsSourceControl.Contents",
+                "type": "AzureDevOpsSourceControl",
+                "parameters": [
+                    {
+                        "dataType": "Text",
+                        "name": "url",
+                        "value": f"https://dev.azure.com/{organizacao}/{projeto}/_git/{repositorio}/",
+                    }
+                ],
+            },
+            "credentialDetails": {
+                "credentials": {
+                    "credentialType": "ServicePrincipal",
+                    "tenantId": self._tenant_id,
+                    "servicePrincipalClientId": self._client_id,
+                    "servicePrincipalSecret": self._client_secret,
+                }
+            },
+        }
+        resposta = requests.post(f"{FABRIC_API_BASE}/connections", headers=self._headers(), json=payload, timeout=30)
+        resposta.raise_for_status()
+        return resposta.json()["id"]
+
+    def configurar_credencial_git(self, workspace_id: str, connection_id: str) -> None:
+        """
+        Aponta a credencial git deste service principal, para o workspace
+        informado, para a conexão criada por `criar_conexao_ado_service_principal`.
+        Passo único de configuração.
+        """
+        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/git/myGitCredentials"
+        payload = {"source": "ConfiguredConnection", "connectionId": connection_id}
+        resposta = requests.patch(url, headers=self._headers(), json=payload, timeout=30)
+        resposta.raise_for_status()
+
+    def status_git(self, workspace_id: str) -> dict:
+        """Consulta o status git do workspace (workspaceHead, remoteCommitHash, changes)."""
+        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/git/status"
+        resposta = requests.get(url, headers=self._headers(), timeout=60)
+        resposta.raise_for_status()
+        return resposta.json()
+
+    def sincronizar_do_git(self, workspace_id: str, allow_override_items: bool = True) -> dict:
+        """
+        Aplica ao workspace os commits mais recentes do branch git conectado
+        (equivalente ao botão "Update all" do portal). Prefere sempre o
+        conteúdo do git em caso de conflito.
+
+        Requer `configurar_credencial_git` já ter sido chamado (uma vez) para
+        este workspace com este service principal.
+
+        Args:
+            allow_override_items: a API do Fabric exige esse consentimento
+                sempre que há qualquer item modificado vindo do git, não só
+                em conflito de verdade — sem ele, a chamada falha com
+                `OverrideItemsNotAllowed` mesmo sem conflito real.
+
+        Returns:
+            O status git consultado antes de disparar a atualização.
+        """
+        status = self.status_git(workspace_id)
+        if status["workspaceHead"] == status["remoteCommitHash"] and not status.get("changes"):
+            return status
+
+        payload = {
+            "workspaceHead": status["workspaceHead"],
+            "remoteCommitHash": status["remoteCommitHash"],
+            "conflictResolution": {
+                "conflictResolutionType": "Workspace",
+                "conflictResolutionPolicy": "PreferRemote",
+            },
+            "options": {"allowOverrideItems": allow_override_items},
+        }
+        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/git/updateFromGit"
+        resposta = requests.post(url, headers=self._headers(), json=payload, timeout=30)
+        resposta.raise_for_status()
+        if resposta.status_code == 202:
+            self._aguardar_operacao_lro(resposta.headers["x-ms-operation-id"])
+        return status
+
+    def commitar_para_git(self, workspace_id: str, comentario: Optional[str] = None) -> dict:
+        """
+        Commita as mudanças do workspace para o repositório git conectado
+        (equivalente ao botão "Commit" do portal) — direção oposta de
+        `sincronizar_do_git`. Ainda não confirmado em produção (só a direção
+        git->Fabric foi validada em outro projeto); se falhar, o fallback é
+        clicar "Commit" manualmente na UI do Fabric.
+
+        Args:
+            comentario: mensagem do commit (máx. 300 caracteres); se omitido,
+                usa o comentário padrão do provedor git.
+
+        Returns:
+            O status git consultado antes de disparar o commit.
+        """
+        status = self.status_git(workspace_id)
+        payload: dict[str, Any] = {"mode": "All", "workspaceHead": status["workspaceHead"]}
+        if comentario:
+            payload["comment"] = comentario[:300]
+
+        url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/git/commitToGit"
+        resposta = requests.post(url, headers=self._headers(), json=payload, timeout=30)
+        resposta.raise_for_status()
+        if resposta.status_code == 202:
+            self._aguardar_operacao_lro(resposta.headers["x-ms-operation-id"])
+        return status
