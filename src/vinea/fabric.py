@@ -6,6 +6,8 @@ from azure.identity import ClientSecretCredential
 
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 FABRIC_API_SCOPE = "https://api.fabric.microsoft.com/.default"
+POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg"
+POWERBI_API_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 
 STATUS_FINAIS = ("Completed", "Failed", "Cancelled", "Deduped")
 
@@ -51,6 +53,64 @@ class FabricJobClient:
     def _headers(self) -> dict:
         token = self._credential.get_token(FABRIC_API_SCOPE).token
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def _headers_powerbi(self) -> dict:
+        token = self._credential.get_token(POWERBI_API_SCOPE).token
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def atualizar_modelo_semantico(
+        self, workspace_id: str, dataset_id: str, aguardar: bool = True, timeout_segundos: int = 600
+    ) -> Optional[dict]:
+        """
+        Dispara um refresh do modelo semântico (API clássica do Power BI, não
+        a do Fabric) — para modelos Direct Lake, isso é o "reenquadramento"
+        (framing) que faz o motor reconhecer tabelas/dados novos direto no
+        Delta Lake. Sem isso, uma tabela recém-adicionada ao modelo (via TOM,
+        ex. `ntb_infancia_cria_modelo_semantico`) pode falhar em visuais com
+        um erro genérico (`QueryUserError` / "capacity or license issue" na
+        UI) até o primeiro refresh automático acontecer sozinho.
+
+        Args:
+            workspace_id: ID do workspace onde está o modelo semântico
+            dataset_id: ID do item SemanticModel (não confundir com o
+                notebookId/logicalId — pegue via GET .../items filtrando
+                type == "SemanticModel")
+            aguardar: se True, espera o refresh terminar antes de retornar
+            timeout_segundos: tempo máximo de espera se aguardar=True
+
+        Returns:
+            O último status consultado (dict), ou None se aguardar=False
+            (nesse caso já retorna depois do disparo, sem esperar)
+
+        Raises:
+            FabricJobError: se o refresh terminar com status diferente de
+                "Completed" (só quando aguardar=True)
+            TimeoutError: se não terminar dentro de timeout_segundos
+        """
+        url = f"{POWERBI_API_BASE}/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
+        resposta = requests.post(url, headers=self._headers_powerbi(), json={"type": "full"}, timeout=30)
+        if resposta.status_code != 202:
+            raise FabricJobError(f"Falha ao disparar refresh do modelo {dataset_id}: {resposta.status_code} {resposta.text}")
+
+        if not aguardar:
+            return None
+
+        url_status = f"{POWERBI_API_BASE}/groups/{workspace_id}/datasets/{dataset_id}/refreshes?$top=1"
+        decorrido = 0
+        intervalo_segundos = 5
+        while True:
+            estado = requests.get(url_status, headers=self._headers_powerbi(), timeout=30).json()["value"][0]
+            status = estado.get("status")
+            if status == "Completed":
+                return estado
+            if status == "Failed":
+                raise FabricJobError(f"Refresh do modelo {dataset_id} falhou: {estado}")
+
+            if decorrido >= timeout_segundos:
+                raise TimeoutError(f"Refresh do modelo {dataset_id} não terminou em {timeout_segundos}s (último status: {status})")
+
+            time.sleep(intervalo_segundos)
+            decorrido += intervalo_segundos
 
     def disparar_notebook(
         self,
