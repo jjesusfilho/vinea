@@ -414,6 +414,10 @@ Retorne o JSON estruturado com os dados extraídos:"""
             )
 
         lista_taxonomia = "\n".join(f"- {c}" for c in taxonomia)
+        taxonomia_valida = {c.strip() for c in taxonomia}
+        categorias_permitidas = (
+            taxonomia_valida | {categoria_nao_criminal} if categoria_nao_criminal else taxonomia_valida
+        )
         resultado: dict[str, Optional[str]] = {}
 
         instrucao_nao_criminal = (
@@ -461,6 +465,12 @@ Retorne APENAS um JSON no formato {{"0": "categoria ou null", "1": "categoria ou
                 categoria = mapa_indices.get(str(i))
                 if categoria and isinstance(categoria, str):
                     categoria = categoria.strip()
+                if categoria and categoria != "null" and categoria not in categorias_permitidas:
+                    print(
+                        f"Categoria fora da taxonomia, descartando: {categoria!r} "
+                        f"(natureza: {natureza[:70]!r})"
+                    )
+                    categoria = None
                 resultado[natureza] = categoria if categoria and categoria != "null" else None
 
         return resultado
