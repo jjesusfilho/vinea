@@ -15,12 +15,14 @@ from .consulta import (
 )
 from .leitura import MNIParser
 from .inf_web_service import TPUClient
+from .municipios import NormalizadorMunicipios
 from .jurisprudencia import EprocJurisprudenciaClient, PaginaResultadosJurisprudencia
 
 __all__ = [
     'MNIClient',
     'MNIParser',
     'TPUClient',
+    'NormalizadorMunicipios',
     'SystemType',
     'SYSTEM_WSDLS',
     'create_esaj_client',
