@@ -10,13 +10,15 @@ autoritativa, então a normalização é determinística: normaliza a grafia e
 casa contra os municípios do IBGE.
 """
 
+import gzip
+import json
 import re
 import unicodedata
+from importlib import resources
 from typing import Optional
 
-import requests
-
 URL_MUNICIPIOS_IBGE = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios"
+ARQUIVO_MUNICIPIOS = "municipios_ibge.json.gz"
 
 _PREFIXOS_ABREVIAVEIS = ("sao", "santa", "santo")
 _CONECTORES = {"de", "do", "da", "dos", "das", "d"}
@@ -81,20 +83,33 @@ class NormalizadorMunicipios:
         'Espírito Santo do Turvo'
     """
 
-    def __init__(self, uf_preferencial: str = "SP", timeout: int = 60):
+    def __init__(self, uf_preferencial: str = "SP", online: bool = False, timeout: int = 60):
         """
         Args:
             uf_preferencial: sigla da UF consultada antes do restante do país.
                 Use `None`/"" para não priorizar nenhuma.
-            timeout: timeout (s) da chamada à API do IBGE.
+            online: se True, busca a lista na API do IBGE em vez de usar a cópia
+                embutida no pacote. O padrão é offline de propósito: dentro de
+                notebook do Fabric, depender de host externo em tempo de execução
+                deixa o pipeline sujeito a bloqueio de rede e a indisponibilidade
+                do IBGE, e a lista de municípios muda muito raramente.
+            timeout: timeout (s) da chamada à API, quando `online=True`.
         """
         self.uf_preferencial = (uf_preferencial or "").upper()
-        municipios = self._buscar_municipios(timeout)
+        municipios = self._buscar_online(timeout) if online else self._carregar_embutidos()
         preferenciais = [m for m in municipios if m["uf"] == self.uf_preferencial]
         self._indices = [self._construir_indice(m) for m in (preferenciais, municipios) if m]
 
     @staticmethod
-    def _buscar_municipios(timeout: int) -> list[dict]:
+    def _carregar_embutidos() -> list[dict]:
+        arquivo = resources.files("vinea.dados").joinpath(ARQUIVO_MUNICIPIOS)
+        with gzip.open(arquivo.open("rb"), "rt", encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _buscar_online(timeout: int) -> list[dict]:
+        import requests
+
         resposta = requests.get(URL_MUNICIPIOS_IBGE, timeout=timeout)
         resposta.raise_for_status()
         # A UF vem do prefixo do código IBGE (2 primeiros dígitos, 35 = SP). É mais
