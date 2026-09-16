@@ -459,6 +459,8 @@ Retorne APENAS um JSON no formato {{"0": "categoria ou null", "1": "categoria ou
 
             for i, natureza in enumerate(lote):
                 categoria = mapa_indices.get(str(i))
+                if categoria and isinstance(categoria, str):
+                    categoria = categoria.strip()
                 resultado[natureza] = categoria if categoria and categoria != "null" else None
 
         return resultado
