@@ -169,6 +169,15 @@ class MNIParser:
         with open(xml_path, "r", encoding="utf-8") as file:
             return file.read()
 
+    def _parse_xml(self, xml_content: str | bytes):
+        """
+        Converte o XML em árvore lxml. O lxml recusa strings com declaração de
+        encoding (caso das respostas do e-Proc), por isso o texto vira bytes.
+        """
+        if isinstance(xml_content, str):
+            xml_content = xml_content.encode("utf-8")
+        return etree.fromstring(xml_content)
+
     def extrair_numero_tempo(self, xml_file: str) -> list[str]:
         arquivo = Path(xml_file).name.replace('.xml', '')
         if arquivo.startswith('cabecalho_'):
@@ -182,7 +191,7 @@ class MNIParser:
 
     def extrair_dados_basicos_xml(self, xml_path: str):
         xml_content = self._read_xml_file(xml_path)
-        root = etree.fromstring(xml_content)
+        root = self._parse_xml(xml_content)
 
         namespaces = {
             'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
@@ -305,7 +314,7 @@ class MNIParser:
 
     def ler_movimentos(self, xml_file: str) -> pd.DataFrame:
         xml_content = self._read_xml_file(xml_file)
-        root = etree.fromstring(xml_content)
+        root = self._parse_xml(xml_content)
 
         namespaces = {
             'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
@@ -373,7 +382,7 @@ class MNIParser:
 
     def ler_lista_documentos(self, xml_file: str) -> pd.DataFrame:
         xml_content = self._read_xml_file(xml_file)
-        root = etree.fromstring(xml_content)
+        root = self._parse_xml(xml_content)
 
         namespaces = {
             'soap': 'http://schemas.xmlsoap.org/soap/envelope/',

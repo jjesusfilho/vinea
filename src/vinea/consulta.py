@@ -4,12 +4,48 @@ import os
 import warnings
 from datetime import datetime
 from typing import Any, Optional, Sequence, Literal
+from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
 from zeep import Client
 from pyspark.sql import SparkSession
 
 CNJ_NAMESPACE = "http://www.cnj.jus.br/intercomunicacao-2.2.2"
+XOP_NAMESPACE = "http://www.w3.org/2004/08/xop/include"
+
+
+def _separar_mtom(conteudo: bytes) -> tuple[bytes, dict[str, bytes]]:
+    """
+    Separa uma resposta MTOM/XOP (multipart/related) no XML SOAP e nos anexos
+    binários, indexados pelo Content-ID. O e-Proc devolve os documentos assim;
+    respostas que não são multipart (e-SAJ) passam sem alteração.
+    """
+    dados = conteudo.lstrip(b"\r\n")
+    if not dados.startswith(b"--"):
+        return conteudo, {}
+
+    fronteira = dados.split(b"\r\n", 1)[0]
+    xml_soap = None
+    anexos: dict[str, bytes] = {}
+
+    for parte in dados.split(fronteira)[1:]:
+        if parte.startswith(b"--"):  # delimitador de fechamento
+            break
+        cabecalho, _, corpo = parte.lstrip(b"\r\n").partition(b"\r\n\r\n")
+        if corpo.endswith(b"\r\n"):
+            corpo = corpo[:-2]
+
+        cabecalhos = {}
+        for linha in cabecalho.decode("latin-1").split("\r\n"):
+            nome, _, valor = linha.partition(":")
+            cabecalhos[nome.strip().lower()] = valor.strip()
+
+        if xml_soap is None and "xml" in cabecalhos.get("content-type", ""):
+            xml_soap = corpo
+        else:
+            anexos[cabecalhos.get("content-id", "").strip("<>")] = corpo
+
+    return (xml_soap if xml_soap is not None else conteudo), anexos
 
 # Tipos de sistema disponíveis
 SystemType = Literal["esaj", "eproc1g_2.2", "eproc1g_3.0", "eproc2g"]
@@ -312,15 +348,28 @@ class MNIClient():
         arquivos_salvos = []
         os.makedirs(save_dir, exist_ok=True)
 
+        xml_content, anexos = _separar_mtom(xml_content)
+
         for document in self._iter_document_elements(xml_content):
             conteudo = document.find(f"{{{CNJ_NAMESPACE}}}conteudo")
-            if conteudo is None or not conteudo.text:
+            if conteudo is None:
                 continue
 
-            try:
-                conteudo_bytes = base64.b64decode(conteudo.text)
-            except Exception as e:
-                print(f"Não foi possível decodificar o documento {document.get('idDocumento')}: {e}")
+            include = conteudo.find(f"{{{XOP_NAMESPACE}}}Include")
+            if include is not None:
+                # e-Proc: o binário vem como anexo MTOM referenciado por cid
+                cid = unquote(include.get("href", "").removeprefix("cid:"))
+                conteudo_bytes = anexos.get(cid)
+                if conteudo_bytes is None:
+                    print(f"Anexo {cid} do documento {document.get('idDocumento')} não encontrado na resposta")
+                    continue
+            elif conteudo.text:
+                try:
+                    conteudo_bytes = base64.b64decode(conteudo.text)
+                except Exception as e:
+                    print(f"Não foi possível decodificar o documento {document.get('idDocumento')}: {e}")
+                    continue
+            else:
                 continue
 
             doc_id = document.get("idDocumento", "documento")
@@ -411,7 +460,12 @@ class MNIClient():
 
 
 # Factory methods para facilitar a criação de clientes
-def create_esaj_client(usuario: str, senha: str, spark: Optional[SparkSession] = None) -> MNIClient:
+def create_esaj_client(
+    usuario: str,
+    senha: str,
+    spark: Optional[SparkSession] = None,
+    use_spark: bool = True
+) -> MNIClient:
     """
     Cria um cliente para o sistema E-SAJ
 
@@ -419,11 +473,12 @@ def create_esaj_client(usuario: str, senha: str, spark: Optional[SparkSession] =
         usuario: Usuário para autenticação
         senha: Senha para autenticação
         spark: Sessão Spark opcional
+        use_spark: Se False, salva os XMLs sem Spark
 
     Returns:
         MNIClient configurado para E-SAJ
     """
-    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="esaj")
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="esaj", use_spark=use_spark)
 
 
 def create_eproc1g_client(
@@ -431,7 +486,8 @@ def create_eproc1g_client(
     senha: Optional[str] = None,
     spark: Optional[SparkSession] = None,
     version: Literal["2.2", "3.0"] = "2.2",
-    auto_password: bool = True
+    auto_password: bool = True,
+    use_spark: bool = True
 ) -> MNIClient:
     """
     Cria um cliente para o sistema E-Proc 1ª Instância
@@ -442,6 +498,7 @@ def create_eproc1g_client(
         spark: Sessão Spark opcional
         version: Versão da API ("2.2" ou "3.0")
         auto_password: Se True, gera a senha automaticamente usando a data atual
+        use_spark: Se False, salva os XMLs sem Spark
 
     Returns:
         MNIClient configurado para E-Proc 1G
@@ -452,14 +509,15 @@ def create_eproc1g_client(
         raise ValueError("Senha deve ser fornecida ou auto_password deve ser True")
 
     system = f"eproc1g_{version}"
-    return MNIClient(usuario=usuario, senha=senha, spark=spark, system=system)
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system=system, use_spark=use_spark)
 
 
 def create_eproc2g_client(
     usuario: str,
     senha: Optional[str] = None,
     spark: Optional[SparkSession] = None,
-    auto_password: bool = True
+    auto_password: bool = True,
+    use_spark: bool = True
 ) -> MNIClient:
     """
     Cria um cliente para o sistema E-Proc 2ª Instância
@@ -469,6 +527,7 @@ def create_eproc2g_client(
         senha: Senha para autenticação (se None e auto_password=True, será gerada automaticamente)
         spark: Sessão Spark opcional
         auto_password: Se True, gera a senha automaticamente usando a data atual
+        use_spark: Se False, salva os XMLs sem Spark
 
     Returns:
         MNIClient configurado para E-Proc 2G
@@ -478,4 +537,4 @@ def create_eproc2g_client(
     elif senha is None:
         raise ValueError("Senha deve ser fornecida ou auto_password deve ser True")
 
-    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="eproc2g")
+    return MNIClient(usuario=usuario, senha=senha, spark=spark, system="eproc2g", use_spark=use_spark)
