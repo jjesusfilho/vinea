@@ -19,6 +19,16 @@ except ImportError:
     MSSPARKUTILS_AVAILABLE = False
 
 
+from .consulta import _separar_mtom
+
+NAMESPACES = {
+    'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
+    'ns2': 'http://www.cnj.jus.br/intercomunicacao-2.2.2',
+    'ns4': 'http://www.cnj.jus.br/servico-intercomunicacao-2.2.2/'
+}
+PREFIXOS_ARQUIVO = ('cabecalho_', 'movimentos_', 'lista_documentos_')
+
+
 class MNIParser:
     """
     Parser leve para MNI que opera sobre arquivos XML.
@@ -76,12 +86,13 @@ class MNIParser:
             diretorio = arquivo_path.parent.name
 
         nome_sem_ext = nome_arquivo.replace(".xml", "")
-        if nome_sem_ext.startswith("cabecalho_"):
-            numero_processo_raw = nome_sem_ext.replace("cabecalho_", "")
-            tipo_consulta = "cabecalho"
-        else:
-            numero_processo_raw = nome_sem_ext
-            tipo_consulta = "documentos"
+        numero_processo_raw = nome_sem_ext
+        tipo_consulta = "documentos"
+        for prefixo in PREFIXOS_ARQUIVO:
+            if nome_sem_ext.startswith(prefixo):
+                numero_processo_raw = nome_sem_ext.removeprefix(prefixo)
+                tipo_consulta = prefixo.rstrip("_")
+                break
 
         mtime = self._get_file_mtime(caminho_arquivo)
         data_carga = datetime.fromtimestamp(mtime)
@@ -180,10 +191,11 @@ class MNIParser:
 
     def extrair_numero_tempo(self, xml_file: str) -> list[str]:
         arquivo = Path(xml_file).name.replace('.xml', '')
-        if arquivo.startswith('cabecalho_'):
-            numero_processo = arquivo.replace('cabecalho_', '')
-        else:
-            numero_processo = arquivo
+        numero_processo = arquivo
+        for prefixo in PREFIXOS_ARQUIVO:
+            if arquivo.startswith(prefixo):
+                numero_processo = arquivo.removeprefix(prefixo)
+                break
 
         timestamp = int(self._get_file_mtime(xml_file))
 
@@ -191,13 +203,34 @@ class MNIParser:
 
     def extrair_dados_basicos_xml(self, xml_path: str):
         xml_content = self._read_xml_file(xml_path)
-        root = self._parse_xml(xml_content)
+        return self._dados_basicos(self._parse_xml(xml_content))
 
-        namespaces = {
-            'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
-            'ns2': 'http://www.cnj.jus.br/intercomunicacao-2.2.2',
-            'ns4': 'http://www.cnj.jus.br/servico-intercomunicacao-2.2.2/'
-        }
+    def ler_resposta(self, xml_content: str | bytes, hora_coleta: Optional[datetime] = None) -> dict[str, pd.DataFrame]:
+        """
+        Lê, de uma vez, a resposta de consultarProcesso em memória (por exemplo
+        os bytes de MNIClient.consultar_xml), inclusive respostas MTOM do e-Proc.
+
+        Args:
+            xml_content: XML SOAP da resposta.
+            hora_coleta: momento da coleta (padrão: agora, em UTC sem fuso,
+                como em ler_movimentos).
+
+        Returns:
+            dict com os DataFrames "processo", "partes" e "movimentos".
+        """
+        if isinstance(xml_content, str):
+            xml_content = xml_content.encode("utf-8")
+        xml_content, _ = _separar_mtom(xml_content)
+        root = self._parse_xml(xml_content)
+        df_processo, df_partes = self._dados_basicos(root)
+        numero = df_processo['numero_processo'].iloc[0] if 'numero_processo' in df_processo.columns else None
+        if hora_coleta is None:
+            hora_coleta = pd.Timestamp.now(tz='UTC').tz_localize(None).to_pydatetime()
+        df_movimentos = self._movimentos(root, numero, int(pd.Timestamp(hora_coleta).timestamp()))
+        return {"processo": df_processo, "partes": df_partes, "movimentos": df_movimentos}
+
+    def _dados_basicos(self, root) -> tuple[pd.DataFrame, pd.DataFrame]:
+        namespaces = NAMESPACES
 
         dados_basicos = root.find('.//ns2:dadosBasicos', namespaces)
         if dados_basicos is None:
@@ -242,6 +275,11 @@ class MNIParser:
         situacao = dados_basicos.find('.//ns2:outroParametro[@nome="situacaoProcesso"]', namespaces)
         if situacao is not None:
             processo_data['situacao_processo'] = situacao.get('valor')
+
+        # e-SAJ: número do processo de origem quando a consulta cai num recurso
+        superior = dados_basicos.find('.//ns2:outroParametro[@nome="numeroProcessoSuperior"]', namespaces)
+        if superior is not None:
+            processo_data['numero_processo_superior'] = superior.get('valor')
 
         orgao = dados_basicos.find('.//ns2:orgaoJulgador', namespaces)
         if orgao is not None:
@@ -315,15 +353,12 @@ class MNIParser:
     def ler_movimentos(self, xml_file: str) -> pd.DataFrame:
         xml_content = self._read_xml_file(xml_file)
         root = self._parse_xml(xml_content)
-
-        namespaces = {
-            'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
-            'ns2': 'http://www.cnj.jus.br/intercomunicacao-2.2.2',
-            'ns4': 'http://www.cnj.jus.br/servico-intercomunicacao-2.2.2/'
-        }
-
-        movimentos = []
         numero_processo, hora_coleta = self.extrair_numero_tempo(xml_file)
+        return self._movimentos(root, numero_processo, hora_coleta)
+
+    def _movimentos(self, root, numero_processo: Optional[str], hora_coleta: int | str) -> pd.DataFrame:
+        namespaces = NAMESPACES
+        movimentos = []
 
         for mov in root.xpath('.//ns2:movimento', namespaces=namespaces):
             local = mov.find('.//ns2:movimentoLocal', namespaces)
