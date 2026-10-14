@@ -1,14 +1,63 @@
 import base64
 import hashlib
 import os
+import re
 import warnings
 from datetime import datetime
-from typing import Any, Optional, Sequence, Literal
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Literal
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from zeep import Client
-from pyspark.sql import SparkSession
+from zeep.transports import Transport
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
+
+FUSO_TJSP = ZoneInfo("America/Sao_Paulo")
+
+
+class MNIErro(Exception):
+    """Resposta do MNI com sucesso=false (ex.: processo não encontrado, senha inválida)."""
+
+    def __init__(self, numero_processo: str, mensagem: Optional[str]):
+        self.numero_processo = numero_processo
+        self.mensagem = mensagem
+        super().__init__(f"{numero_processo}: {mensagem}")
+
+
+def _transporte(timeout: float) -> Transport:
+    """Transporte zeep com timeout e novas tentativas para falhas de rede e 5xx.
+
+    consultarProcesso é só leitura, então repetir o POST é seguro.
+    """
+    retry = Retry(
+        total=4,
+        backoff_factor=2,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST"),
+    )
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
+    return Transport(session=session, timeout=timeout, operation_timeout=timeout)
+
+
+def _verificar_sucesso(conteudo: bytes, numero_processo: str) -> None:
+    """Lança MNIErro se a resposta não trouxer sucesso=true."""
+    xml_soap, _ = _separar_mtom(conteudo)
+    texto = xml_soap.decode("utf-8", errors="replace")
+    sucesso = re.search(r"<(?:[\w-]+:)?sucesso>\s*(\w+)\s*<", texto)
+    if sucesso and sucesso.group(1).lower() == "true":
+        return
+    mensagem = re.search(r"<(?:[\w-]+:)?mensagem>(.*?)</", texto, re.S)
+    falha = re.search(r"<(?:[\w-]+:)?faultstring>(.*?)</", texto, re.S)
+    detalhe = mensagem or falha
+    raise MNIErro(numero_processo, detalhe.group(1).strip() if detalhe else "resposta sem campo sucesso")
 
 CNJ_NAMESPACE = "http://www.cnj.jus.br/intercomunicacao-2.2.2"
 XOP_NAMESPACE = "http://www.w3.org/2004/08/xop/include"
@@ -94,7 +143,9 @@ def generate_eproc_password(secret: Optional[str] = None, date: Optional[datetim
             )
 
     if date is None:
-        date = datetime.now()
+        # Data de São Paulo: em servidores UTC (ex.: Fabric), entre 21h e 24h a
+        # data local já seria o dia seguinte e a senha sairia errada.
+        date = datetime.now(FUSO_TJSP)
 
     # Formata a data como DD-MM-AAAA
     date_str = date.strftime("%d-%m-%Y")
@@ -122,10 +173,11 @@ class MNIClient():
         self,
         usuario: str,
         senha: str,
-        spark: Optional[SparkSession] = None,
+        spark: Optional["SparkSession"] = None,
         system: SystemType = "esaj",
         wsdl: Optional[str] = None,
-        use_spark: bool = True
+        use_spark: bool = True,
+        timeout: float = 60,
     ):
         """
         Inicializa o cliente TJSP com Zeep
@@ -137,6 +189,7 @@ class MNIClient():
             system: Sistema a ser usado ("esaj", "eproc1g_2.2", "eproc1g_3.0", "eproc2g")
             wsdl: WSDL customizado (sobrescreve o padrão do sistema)
             use_spark: Se True, cria/usa Spark; se False, não usa Spark (padrão: True)
+            timeout: Timeout em segundos de cada chamada HTTP ao serviço
         """
         self.system = system
         self.use_spark = use_spark
@@ -154,11 +207,13 @@ class MNIClient():
 
         self.usuario = usuario
         self.senha = senha
-        self.client = Client(wsdl=self.wsdl)
+        self.client = Client(wsdl=self.wsdl, transport=_transporte(timeout))
 
         # Inicializa ou usa a sessão Spark fornecida
         if use_spark:
             if spark is None:
+                from pyspark.sql import SparkSession
+
                 self.spark = SparkSession.builder \
                     .appName(f"MNIClient-{system}") \
                     .getOrCreate()
@@ -214,6 +269,33 @@ class MNIClient():
                             f"Recebido: '{numero_limpo}'")
         
         return numero_limpo
+
+    def consultar_xml(
+        self,
+        numero_processo: str,
+        *,
+        movimentos: bool = True,
+        incluir_cabecalho: bool = True,
+    ) -> bytes:
+        """
+        Consulta o processo e devolve o XML SOAP cru, sem gravar em disco.
+
+        Diferente dos métodos que salvam arquivo, não engole erros: falhas de
+        rede propagam a exceção original (depois das novas tentativas) e
+        respostas com sucesso=false lançam MNIErro.
+        """
+        numero_limpo = self.validar_numero_processo(numero_processo)
+        with self.client.settings(raw_response=True, strict=False):
+            resposta = self.client.service.consultarProcesso(
+                idConsultante=self.usuario,
+                senhaConsultante=self.senha,
+                numeroProcesso=numero_limpo,
+                movimentos=movimentos,
+                dataReferencia=None,
+                incluirCabecalho=incluir_cabecalho,
+            )
+        _verificar_sucesso(resposta.content, numero_limpo)
+        return resposta.content
 
     def _consultar_processo_e_salvar(
         self,
@@ -463,7 +545,7 @@ class MNIClient():
 def create_esaj_client(
     usuario: str,
     senha: str,
-    spark: Optional[SparkSession] = None,
+    spark: Optional["SparkSession"] = None,
     use_spark: bool = True
 ) -> MNIClient:
     """
@@ -484,7 +566,7 @@ def create_esaj_client(
 def create_eproc1g_client(
     usuario: str,
     senha: Optional[str] = None,
-    spark: Optional[SparkSession] = None,
+    spark: Optional["SparkSession"] = None,
     version: Literal["2.2", "3.0"] = "2.2",
     auto_password: bool = True,
     use_spark: bool = True
@@ -515,7 +597,7 @@ def create_eproc1g_client(
 def create_eproc2g_client(
     usuario: str,
     senha: Optional[str] = None,
-    spark: Optional[SparkSession] = None,
+    spark: Optional["SparkSession"] = None,
     auto_password: bool = True,
     use_spark: bool = True
 ) -> MNIClient:

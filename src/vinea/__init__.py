@@ -6,6 +6,7 @@ from .auth_certificado import (
 )
 from .consulta import (
     MNIClient,
+    MNIErro,
     SystemType,
     SYSTEM_WSDLS,
     create_esaj_client,
@@ -20,6 +21,7 @@ from .jurisprudencia import EprocJurisprudenciaClient, PaginaResultadosJurisprud
 
 __all__ = [
     'MNIClient',
+    'MNIErro',
     'MNIParser',
     'TPUClient',
     'NormalizadorMunicipios',
