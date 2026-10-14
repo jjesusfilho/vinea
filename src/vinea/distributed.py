@@ -11,6 +11,49 @@ from datetime import datetime
 import numpy as np
 from pypdf import PdfReader
 from pdfminer.high_level import extract_text
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+TIMEOUT = 60
+
+
+def _sessao() -> requests.Session:
+    """Sessão com timeout implícito por chamada e novas tentativas com backoff."""
+    retry = Retry(total=5, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",))
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+def _dv_cnj_valido(digitos: str) -> bool:
+    """Confere o dígito verificador CNJ (módulo 97) de um número com 20 dígitos."""
+    n, dv, resto = digitos[:7], digitos[7:9], digitos[9:]
+    return 98 - int(n + resto + "00") % 97 == int(dv)
+
+
+def corrigir_numero(processo: str) -> str:
+    """Desfaz o defeito do PDF do TJSP em números que começam com zeros.
+
+    O TJSP tira os zeros à esquerda do número antes de aplicar a máscara, e os dígitos
+    escorregam: 0033246-70.2026.8.26.0100 sai impresso como 3324670-20.2682.6.01.0100
+    (os 20 dígitos ficam os sem zeros, cortados, mais a origem de novo no fim). Afeta
+    sobretudo cumprimento de sentença, recursos e apelações do eproc, que herdam números
+    antigos; medido em 09/10/2026: 7.720 processos, crescendo mês a mês.
+
+    Recoloca k zeros e testa o dígito verificador; só troca quando exatamente um k dá
+    número válido do TJSP (8.26). Número de outro tribunal (ex.: 4.03, TRF3) que já vem
+    certo não tem reconstrução e fica como está.
+    """
+    digitos = re.sub(r"\D", "", processo)
+    if len(digitos) != 20 or digitos[13:16] == "826":
+        return processo
+    candidatos = []
+    for k in range(1, 8):
+        r = "0" * k + digitos[:16 - k] + digitos[-4:]
+        if r[13:16] == "826" and _dv_cnj_valido(r):
+            candidatos.append(f"{r[:7]}-{r[7:9]}.{r[9:13]}.8.26.{r[16:]}")
+    return candidatos[0] if len(candidatos) == 1 else processo
 
 
 def extract_observations(texto):
@@ -44,6 +87,7 @@ def extract_observations(texto):
     processo_pattern = r'^\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}$'
     if 'processo' in df.columns:
         df = df[df['processo'].str.match(processo_pattern, na=False)].copy()
+        df['processo'] = df['processo'].map(corrigir_numero)
 
     return df
 
@@ -130,8 +174,8 @@ def list_distributed_urls(all_pages: bool = False, tipo_destino: int = 3441) -> 
     Returns:
         List of href strings pointing to PDF files.
     """
-    session = requests.Session()
-    response = session.get(BASE_LIST_URL)
+    session = _sessao()
+    response = session.get(BASE_LIST_URL, timeout=TIMEOUT)
     response.raise_for_status()
     dom = html.fromstring(response.content)
 
@@ -143,7 +187,7 @@ def list_distributed_urls(all_pages: bool = False, tipo_destino: int = 3441) -> 
         total_pages = int(pages_text.replace("Página 1 de ", ""))
         for page in range(2, total_pages + 1):
             page_url = f"{BASE_LIST_URL}?pagina={page}&tipoDestino={tipo_destino}"
-            resp = session.get(page_url)
+            resp = session.get(page_url, timeout=TIMEOUT)
             resp.raise_for_status()
             dom = html.fromstring(resp.content)
             urls.extend(dom.xpath(link_xpath))
@@ -167,10 +211,10 @@ def download_distributed(
     dest_dir = Path(diretorio)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    session = requests.Session()
+    session = _sessao()
     for codigo in codigos:
         download_url = f"{BASE_DOWNLOAD_URL}?codigo={codigo}"
-        response = session.get(download_url)
+        response = session.get(download_url, timeout=TIMEOUT)
         response.raise_for_status()
         output_path = dest_dir / f"{codigo}.pdf"
         output_path.write_bytes(response.content)
