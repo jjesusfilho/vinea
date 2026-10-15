@@ -12,11 +12,18 @@ except ImportError:
     SparkSession = None
     SPARK_AVAILABLE = False
 
-try:
-    from notebookutils import mssparkutils
-    MSSPARKUTILS_AVAILABLE = True
-except ImportError:
-    MSSPARKUTILS_AVAILABLE = False
+def _mssparkutils():
+    """mssparkutils do Fabric, ou None fora dele.
+
+    Importado só quando usado: num executor do Spark, importar notebookutils tenta criar
+    um SparkContext e lança PySparkRuntimeError (não ImportError), o que impedia importar
+    o vinea dentro de UDFs e mapInPandas.
+    """
+    try:
+        from notebookutils import mssparkutils
+    except Exception:
+        return None
+    return mssparkutils
 
 
 from .consulta import _separar_mtom
@@ -63,10 +70,10 @@ class MNIParser:
         Obtém o timestamp de modificação de um arquivo local ou ABFSS (via mssparkutils).
         """
         if self.use_spark and self._is_abfss_path(file_path):
-            if not MSSPARKUTILS_AVAILABLE:
+            if _mssparkutils() is None:
                 raise ImportError("mssparkutils não está disponível para caminhos ABFSS")
             try:
-                info = mssparkutils.fs.ls(file_path)
+                info = _mssparkutils().fs.ls(file_path)
                 return info[0].modifyTime / 1000.0 if info else datetime.now().timestamp()
             except Exception:
                 return datetime.now().timestamp()
@@ -107,9 +114,9 @@ class MNIParser:
         else:
             numero_processo_formatado = numero_processo_raw
 
-        if self.use_spark and self._is_abfss_path(caminho_arquivo) and MSSPARKUTILS_AVAILABLE:
+        if self.use_spark and self._is_abfss_path(caminho_arquivo) and _mssparkutils() is not None:
             try:
-                info = mssparkutils.fs.ls(caminho_arquivo)
+                info = _mssparkutils().fs.ls(caminho_arquivo)
                 tamanho = info[0].size if info else 0
             except Exception:
                 tamanho = 0
@@ -147,10 +154,10 @@ class MNIParser:
         path = Path(xml_path)
         # leitura direta em ABFSS (arquivo ou diretório) via mssparkutils ou Spark
         if self.use_spark and self._is_abfss_path(xml_path):
-            if MSSPARKUTILS_AVAILABLE:
+            if _mssparkutils() is not None:
                 try:
                     # tenta ler o início do arquivo (head)
-                    return mssparkutils.fs.head(xml_path)
+                    return _mssparkutils().fs.head(xml_path)
                 except Exception:
                     # provavelmente é diretório: concatena shards via Spark
                     df = self.spark.read.text(xml_path)
