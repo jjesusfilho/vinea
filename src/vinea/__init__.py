@@ -15,6 +15,7 @@ from .consulta import (
     generate_eproc_password,
 )
 from .leitura import MNIParser
+from .leitura_completa import extrair_registros, ler_resposta_completa
 from .inf_web_service import TPUClient
 from .municipios import NormalizadorMunicipios
 from .jurisprudencia import EprocJurisprudenciaClient, PaginaResultadosJurisprudencia
@@ -23,6 +24,8 @@ __all__ = [
     'MNIClient',
     'MNIErro',
     'MNIParser',
+    'ler_resposta_completa',
+    'extrair_registros',
     'TPUClient',
     'NormalizadorMunicipios',
     'SystemType',
