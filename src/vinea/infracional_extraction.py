@@ -252,6 +252,8 @@ INSTRUÇÕES:
 8. Para enums, use exatamente os valores definidos no schema
 9. Seja preciso e fiel ao conteúdo do documento — não infira dados que não estão no texto
 10. Retorne APENAS o JSON válido, sem texto adicional
+11. Grau de instrução: preencha "grau_instrucao_origem" com o texto como está no documento e "grau_instrucao" com o valor do enum. Se o documento disser só "1º grau", "2º grau" ou "superior", sem incompleto/completo, use "completo". Se não houver o dado, use null
+12. Entorpecentes: em crimes de drogas, preencha "entorpecentes" com UM item por substância apreendida. "texto_origem" recebe o trecho do documento copiado como está. Se o documento CONTA embalagens (pinos, porções, pedras, eppendorfs...), preencha "contagem" e "unidade_embalagem". Se traz PESO, preencha "massa_bruta_gramas" (ou "massa_liquida_gramas" só quando o documento disser explicitamente que é líquida), convertendo kg e mg para gramas e vírgula decimal para ponto. Peso "aproximado" ou sem qualificação é massa bruta. Contagem e peso do mesmo item vão no mesmo registro. Nunca estime gramas a partir de contagem. Insumos químicos (solventes, ex.: cloreto de metileno) não são entorpecentes: não os inclua
 
 SCHEMA JSON:
 {json.dumps(schema, indent=2, ensure_ascii=False)}

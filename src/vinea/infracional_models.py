@@ -34,6 +34,42 @@ class Sexo(str, Enum):
     NAO_INFORMADO = "não informado"
 
 
+class GrauInstrucao(str, Enum):
+    """Grau de instrução, na taxonomia do boletim de ocorrência paulista"""
+    SEM_INSTRUCAO = "sem instrução"
+    FUNDAMENTAL_INCOMPLETO = "1º grau incompleto"
+    FUNDAMENTAL_COMPLETO = "1º grau completo"
+    MEDIO_INCOMPLETO = "2º grau incompleto"
+    MEDIO_COMPLETO = "2º grau completo"
+    SUPERIOR_INCOMPLETO = "superior incompleto"
+    SUPERIOR_COMPLETO = "superior completo"
+    NAO_INFORMADO = "não informado"
+
+
+class Substancia(str, Enum):
+    """Substância entorpecente apreendida"""
+    MACONHA = "maconha"
+    COCAINA = "cocaína"
+    CRACK = "crack"
+    HAXIXE = "haxixe"
+    SINTETICA = "sintética"  # ecstasy, LSD, MDMA e similares
+    OUTRA = "outra"
+
+
+class UnidadeEmbalagem(str, Enum):
+    """Forma em que a droga foi contada (quando o documento conta em vez de pesar)"""
+    PINO = "pino"
+    PORCAO = "porção"
+    PEDRA = "pedra"
+    EPPENDORF = "eppendorf"
+    PAPELOTE = "papelote"
+    TROUXINHA = "trouxinha"
+    TIJOLO = "tijolo"
+    BUCHA = "bucha"
+    COMPRIMIDO = "comprimido"
+    OUTRA = "outra"
+
+
 class ConsumadoTentado(str, Enum):
     """Se o ato infracional/crime foi consumado ou tentado"""
     CONSUMADO = "consumado"
@@ -51,6 +87,26 @@ class IdentificacaoProcesso(BaseModel):
     competencia: Optional[str] = Field(None, description="Código de competência do MNI")
 
 
+class EntorpecenteApreendido(BaseModel):
+    """
+    Uma substância entorpecente apreendida, com a quantidade em até três formas:
+    o texto como veio no documento, a contagem de embalagens e a massa em gramas.
+    Insumos químicos (solventes, etc.) NÃO são entorpecentes e não entram aqui.
+    """
+    substancia: Optional[Substancia] = Field(None, description="Substância apreendida")
+    texto_origem: Optional[str] = Field(
+        None, description="Trecho do documento que descreve esta apreensão, copiado como está"
+    )
+    contagem: Optional[int] = Field(None, description="Quantidade de embalagens, quando o documento conta (ex.: 25 pinos)")
+    unidade_embalagem: Optional[UnidadeEmbalagem] = Field(None, description="Tipo de embalagem contada")
+    massa_bruta_gramas: Optional[float] = Field(
+        None, description="Massa bruta em gramas, só se o documento traz peso (converter kg e mg para gramas)"
+    )
+    massa_liquida_gramas: Optional[float] = Field(
+        None, description="Massa líquida em gramas, só se o documento a informa explicitamente como líquida"
+    )
+
+
 class Crime(BaseModel):
     """Um crime/natureza dentro de um boletim de ocorrência (pode haver mais de um por BO)"""
     especie: Optional[str] = Field(None, description="Espécie da natureza (ex.: Crimes contra o patrimônio)")
@@ -59,6 +115,9 @@ class Crime(BaseModel):
         None, description="Objeto material da conduta, quando aplicável (ex.: tipo de droga apreendida)"
     )
     consumado_ou_tentado: Optional[ConsumadoTentado] = Field(None, description="Consumado ou tentado")
+    entorpecentes: Optional[list[EntorpecenteApreendido]] = Field(
+        None, description="Entorpecentes apreendidos neste crime, um item por substância (crimes de drogas)"
+    )
 
 
 class BoletimOcorrencia(BaseModel):
@@ -108,6 +167,10 @@ class PessoaEnvolvida(BaseModel):
     naturalidade: Optional[str] = Field(None, description="Naturalidade")
     estado_civil: Optional[str] = Field(None, description="Estado civil")
     profissao: Optional[str] = Field(None, description="Profissão/ocupação")
+    grau_instrucao: Optional[GrauInstrucao] = Field(None, description="Grau de instrução/escolaridade")
+    grau_instrucao_origem: Optional[str] = Field(
+        None, description="Texto do grau de instrução como veio no documento, copiado como está"
+    )
     nome_pai: Optional[str] = Field(None, description="Nome do pai")
     nome_mae: Optional[str] = Field(None, description="Nome da mãe")
 
