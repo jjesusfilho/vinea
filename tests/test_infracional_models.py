@@ -33,3 +33,9 @@ def test_crime_com_entorpecentes_contagem_e_massa():
 
 def test_crime_sem_drogas_continua_valido():
     assert Crime(natureza="Furto").entorpecentes is None
+
+
+def test_pessoa_preserva_texto_original_do_papel():
+    p = PessoaEnvolvida(categoria="adolescente representado", categoria_origem="Autor do fato")
+    assert p.categoria.value == "adolescente representado"
+    assert p.categoria_origem == "Autor do fato"

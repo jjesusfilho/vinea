@@ -154,6 +154,9 @@ class PessoaEnvolvida(BaseModel):
     principalmente dos documentos de qualificação, não do BO em si.
     """
     categoria: Optional[CategoriaPessoa] = Field(None, description="Papel da pessoa no processo")
+    categoria_origem: Optional[str] = Field(
+        None, description="Texto que descreve o papel da pessoa no documento, copiado como está (para auditoria)"
+    )
     nome: Optional[str] = Field(None, description="Nome completo")
     data_nascimento: Optional[date] = Field(None, description="Data de nascimento")
     sexo: Optional[Sexo] = Field(None, description="Sexo")
