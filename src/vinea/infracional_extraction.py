@@ -204,7 +204,7 @@ class InfracionalExtractor:
         texto_bo: str,
         numero_processo: str,
         textos_qualificacao: Optional[list[str]] = None,
-        max_completion_tokens: int = 4000,
+        max_completion_tokens: int = 16000,
         temperature: Optional[float] = None,
     ) -> ProcessoInfracionalData:
         """
@@ -217,7 +217,11 @@ class InfracionalExtractor:
                 partes (Auto de Qualificação, Petição (Outras) etc.), se
                 houver — é onde normalmente está a qualificação completa
                 das pessoas, não no BO
-            max_completion_tokens: Número máximo de tokens na resposta
+            max_completion_tokens: Número máximo de tokens na resposta. Modelos
+                de raciocínio gastam parte dele pensando antes de responder; com
+                4000, cerca de 14% dos processos reais (muitos boletins, textos
+                longos) voltavam com resposta vazia. Com 16000, os casos testados
+                voltaram todos preenchidos.
             temperature: Temperatura para geração (menor = mais determinístico).
                 None (padrão) não envia o parâmetro — modelos de raciocínio
                 (ex.: GPT-5, o1/o3) só aceitam o valor default e retornam erro
@@ -304,13 +308,16 @@ Retorne o JSON estruturado com os dados extraídos:"""
         numero_processo: str,
         textos_qualificacao: Optional[list[str]] = None,
         geocode: bool = True,
+        max_completion_tokens: int = 16000,
     ) -> ProcessoInfracionalData:
         """
         Extrai dados de um processo a partir de textos já extraídos (ex.:
         vindos do MNI via `vinea.MNIClient`, sem precisar salvar em PDF).
         """
         print(f"Extraindo dados estruturados com LLM para o processo {numero_processo}...")
-        dados = self.extract_infracional_data_with_llm(texto_bo, numero_processo, textos_qualificacao)
+        dados = self.extract_infracional_data_with_llm(
+            texto_bo, numero_processo, textos_qualificacao, max_completion_tokens=max_completion_tokens
+        )
 
         if geocode:
             print("Geocodificando endereços...")
