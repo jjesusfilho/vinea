@@ -8,13 +8,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "duckdb>=1.3.2",
-    "pandas>=2.3.3",
-    "pyodbc>=5.2.0",
-    "pyspark>=4.0.1",
+    "pandas>=2.0",
     "python-dotenv>=1.1.1",
-    "requests>=2.32.4",
-    "sqlalchemy>=2.0.43",
+    "requests>=2.31",
     "zeep>=4.3.1",
     "openai>=1.0.0",
     "pydantic>=2.0.0",
@@ -25,6 +21,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Dependências que o código-fonte do vinea não importa (ou só importa de forma
+# tardia, para tipagem) e que, instaladas dentro de um notebook ou ambiente do
+# Fabric, arriscam colidir com o runtime (o pyspark>=4 exigido antes é mais novo
+# que o Spark 3.5 do Runtime 1.3; a colisão não foi confirmada, só evitada).
+# Quem precisar delas fora do Fabric instala o extra correspondente.
+spark = ["pyspark>=3.5"]
+sql = ["duckdb>=1.3.2", "pyodbc>=5.2.0", "sqlalchemy>=2.0.43"]
 # Só para FabricJobClient (execução remota de notebooks). Mantido fora das
 # dependências principais de propósito: instalar azure-identity dentro de um
 # notebook do Fabric (via %pip install vinea) pode colidir com a versão de
@@ -42,7 +45,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "vinea[fabric]",
+    "vinea[fabric,spark,sql]",
 ]
 
 [tool.uv.sources]
