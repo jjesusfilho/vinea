@@ -2,7 +2,7 @@ import time
 from typing import Any, Optional
 
 import requests
-from azure.identity import ClientSecretCredential
+from azure.identity import ClientSecretCredential, DefaultAzureCredential
 
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 FABRIC_API_SCOPE = "https://api.fabric.microsoft.com/.default"
@@ -32,13 +32,20 @@ class FabricJobClient:
 
     Referência: https://learn.microsoft.com/en-us/fabric/data-engineering/notebook-public-api
 
-    Requer um service principal com papel suficiente (Contributor ou
-    superior) no workspace do item a ser executado.
+    Requer uma identidade com papel suficiente (Contributor ou superior) no
+    workspace do item a ser executado.
     """
 
-    def __init__(self, tenant_id: str, client_id: str, client_secret: str):
+    def __init__(
+        self,
+        tenant_id: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+    ):
         """
-        Inicializa o cliente com um service principal do Azure AD.
+        Inicializa o cliente. Com `client_secret`, autentica como o service
+        principal informado; sem ele, usa `DefaultAzureCredential` (login do
+        `az login`, identidade gerenciada ou variáveis `AZURE_*`), sem segredo.
 
         Args:
             tenant_id: ID do tenant do Azure AD
@@ -48,7 +55,10 @@ class FabricJobClient:
         self._tenant_id = tenant_id
         self._client_id = client_id
         self._client_secret = client_secret
-        self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
+        if client_secret:
+            self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
+        else:
+            self._credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
 
     def _headers(self) -> dict:
         token = self._credential.get_token(FABRIC_API_SCOPE).token
