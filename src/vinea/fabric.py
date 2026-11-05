@@ -58,7 +58,7 @@ class FabricJobClient:
         if client_secret:
             self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
         else:
-            self._credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+            self._credential = DefaultAzureCredential(exclude_interactive_browser_credential=True, process_timeout=60)
 
     def _headers(self) -> dict:
         token = self._credential.get_token(FABRIC_API_SCOPE).token
