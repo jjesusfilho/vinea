@@ -1,8 +1,9 @@
+import os
 import time
 from typing import Any, Optional
 
 import requests
-from azure.identity import ClientSecretCredential, DefaultAzureCredential
+from azure.identity import AzureCliCredential, ClientSecretCredential
 
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 FABRIC_API_SCOPE = "https://api.fabric.microsoft.com/.default"
@@ -10,6 +11,26 @@ POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg"
 POWERBI_API_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 
 STATUS_FINAIS = ("Completed", "Failed", "Cancelled", "Deduped")
+
+KEY_VAULT = "https://kv-jurimetria.vault.azure.net"
+SEGREDOS_SP = ("APP-JURIMETRIA-DEV-CLIENT-ID", "APP-JURIMETRIA-DEV-CLIENT-SECRET", "TENANT-ID")
+
+
+def credenciais_service_principal() -> tuple[str, str, str]:
+    """(tenant_id, client_id, client_secret) do Service Principal: das variáveis
+    ``TENANT_ID``, ``CLIENT_ID`` e ``CLIENT_SECRET`` (ou com prefixo ``AZURE_``) ou, na falta
+    delas, do Key Vault ``KV-Jurimetria``, lido com o login do ``az`` e mantido só em memória
+    (requer ``azure-keyvault-secrets``)."""
+    valores = [os.getenv(n) or os.getenv(f"AZURE_{n}") for n in ("TENANT_ID", "CLIENT_ID", "CLIENT_SECRET")]
+    if all(valores):
+        return tuple(valores)  # type: ignore[return-value]
+    from azure.keyvault.secrets import SecretClient
+
+    cofre = SecretClient(KEY_VAULT, AzureCliCredential(process_timeout=60))
+    client_id, secret, tenant = (cofre.get_secret(n).value for n in SEGREDOS_SP)
+    if not (client_id and secret and tenant):
+        raise RuntimeError(f"segredo vazio no Key Vault ({', '.join(SEGREDOS_SP)})")
+    return tenant, client_id, secret
 
 
 def _tipo_parametro(valor: Any) -> str:
@@ -43,22 +64,22 @@ class FabricJobClient:
         client_secret: Optional[str] = None,
     ):
         """
-        Inicializa o cliente. Com `client_secret`, autentica como o service
-        principal informado; sem ele, usa `DefaultAzureCredential` (login do
-        `az login`, identidade gerenciada ou variáveis `AZURE_*`), sem segredo.
+        Inicializa o cliente, sempre como service principal. Sem `client_secret`,
+        as credenciais vêm de `credenciais_service_principal()` (variáveis
+        `CLIENT_ID`/`CLIENT_SECRET`/`TENANT_ID` ou Key Vault). O login pessoal
+        (`DefaultAzureCredential`) deixou de ser usado em 12/11/2026.
 
         Args:
             tenant_id: ID do tenant do Azure AD
             client_id: ID do aplicativo (service principal)
             client_secret: Segredo do aplicativo
         """
+        if not client_secret:
+            tenant_id, client_id, client_secret = credenciais_service_principal()
         self._tenant_id = tenant_id
         self._client_id = client_id
         self._client_secret = client_secret
-        if client_secret:
-            self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
-        else:
-            self._credential = DefaultAzureCredential(exclude_interactive_browser_credential=True, process_timeout=60)
+        self._credential = ClientSecretCredential(tenant_id, client_id, client_secret)
 
     def _headers(self) -> dict:
         token = self._credential.get_token(FABRIC_API_SCOPE).token
